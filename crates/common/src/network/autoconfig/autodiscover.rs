@@ -6,6 +6,7 @@
 
 use crate::{Server, manager::application::Resource};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use registry::schema::enums::ServiceProtocol;
 use std::fmt::Write;
@@ -170,7 +171,7 @@ fn parse_autodiscover_request(bytes: &[u8]) -> Result<String, String> {
     }
 
     if let Ok(Event::Text(text)) = reader.read_event_into(&mut buf)
-        && let Ok(text) = text.xml_content()
+        && let Ok(text) = text.xml_content(XmlVersion::Implicit1_0)
         && text.contains('@')
     {
         return Ok(text.trim().to_lowercase());

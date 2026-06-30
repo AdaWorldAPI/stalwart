@@ -43,7 +43,7 @@ impl IdentityGet for Server {
         &self,
         mut request: GetRequest<identity::Identity>,
     ) -> trc::Result<GetResponse<identity::Identity>> {
-        let ids = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let properties = request.unwrap_properties(&[
             IdentityProperty::Id,
             IdentityProperty::Name,
@@ -72,14 +72,14 @@ impl IdentityGet for Server {
                 .await?
                 .into(),
             list: Vec::with_capacity(ids.len()),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
 
         for id in ids {
             // Obtain the identity object
             let document_id = id.document_id();
             if !identity_ids.contains(document_id) {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             }
             let _identity = if let Some(identity) = self
@@ -93,7 +93,7 @@ impl IdentityGet for Server {
             {
                 identity
             } else {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             };
             let identity = _identity

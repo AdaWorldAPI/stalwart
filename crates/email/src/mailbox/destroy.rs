@@ -7,7 +7,7 @@
 use super::*;
 use crate::{
     cache::{MessageCacheFetch, email::MessageCacheAccess},
-    message::metadata::MessageData,
+    message::{delete::EmailDeletion, metadata::MessageData},
 };
 use common::{
     Server, auth::AccessToken, sharing::EffectiveAcl, storage::index::ObjectIndexBuilder,
@@ -88,6 +88,8 @@ impl MailboxDestroy for Server {
                 // If the message is in multiple mailboxes, untag it from the current mailbox,
                 // otherwise delete it.
 
+                let mut deleted_ids = RoaringBitmap::new();
+                let mut thread_ids = RoaringBitmap::new();
                 self.archives(
                     account_id,
                     Collection::Email,
@@ -114,6 +116,8 @@ impl MailboxDestroy for Server {
                                     (mailbox.mailbox_id.to_native(), mailbox.uid.to_native()),
                                 );
                             }
+                            deleted_ids.insert(message_id);
+                            thread_ids.insert(prev_message_data.inner.thread_id.to_native());
                             batch
                                 .with_collection(Collection::Email)
                                 .with_document(message_id)
@@ -168,6 +172,10 @@ impl MailboxDestroy for Server {
                 )
                 .await
                 .caused_by(trc::location!())?;
+
+                self.log_emptied_threads(account_id, &mut batch, thread_ids, &deleted_ids)
+                    .await
+                    .caused_by(trc::location!())?;
             } else {
                 return Ok(Err(MailboxDestroyError::HasEmails));
             }

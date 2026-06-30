@@ -1,6 +1,6 @@
 [package]
 name = "managesieve"
-version = "0.16.1"
+version = "0.16.12"
 edition = "2024"
 
 [dependencies]

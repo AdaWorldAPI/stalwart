@@ -259,15 +259,6 @@ pub(crate) async fn task_set(
             continue;
         }
 
-        if !set.server.try_lock_task(task_id).await {
-            set.response.not_destroyed.append(
-                id,
-                SetError::forbidden().with_description(
-                    "Task is currently being processed and cannot be destroyed".to_string(),
-                ),
-            );
-            continue;
-        }
         locked_tasks.push(task_id);
 
         let due = task.due_timestamp();
@@ -327,7 +318,7 @@ pub(crate) async fn task_set(
         // SPDX-SnippetEnd
 
         #[cfg(not(feature = "enterprise"))]
-        {
+        if let Task::DestroyAccount(_) = task {
             set.response.not_destroyed.append(
                 id,
                 SetError::forbidden().with_description(
@@ -408,7 +399,7 @@ pub(crate) async fn task_get(
 pub(crate) async fn task_query(
     mut req: RegistryQueryResponse<'_>,
 ) -> trc::Result<QueryResponseBuilder> {
-    let mut due_from = 100u64;
+    let mut due_from = 1u64;
     let mut due_to = u64::MAX;
     let mut typ = None;
 
@@ -457,13 +448,7 @@ pub(crate) async fn task_query(
             _ => false,
         })?;
 
-    if let Some(anchor) = req.request.anchor {
-        let anchor = anchor.id();
-        if anchor > due_from {
-            due_from = anchor;
-        }
-    }
-
+    let anchor_id = req.request.anchor.map(|anchor| anchor.id());
     if req
         .request
         .sort
@@ -480,6 +465,30 @@ pub(crate) async fn task_query(
         .request
         .extract_parameters(req.server.core.jmap.query_max_results, None)?;
 
+    let mut from_id = 0u64;
+    let mut to_id = u64::MAX;
+    if let Some(anchor_id) = anchor_id
+        && let Some(anchor_task) = req
+            .server
+            .store()
+            .get_value::<Task>(ValueKey::from(ValueClass::TaskQueue(
+                TaskQueueClass::Task { id: anchor_id },
+            )))
+            .await
+            .caused_by(trc::location!())?
+    {
+        let anchor_due = anchor_task.due_timestamp();
+        if anchor_due >= due_from && anchor_due <= due_to {
+            if params.sort_ascending {
+                due_from = anchor_due;
+                from_id = anchor_id;
+            } else {
+                due_to = anchor_due;
+                to_id = anchor_id;
+            }
+        }
+    }
+
     // Build response
     let mut response = QueryResponseBuilder::new(
         req.server.core.jmap.query_max_results + 1,
@@ -489,13 +498,12 @@ pub(crate) async fn task_query(
     );
 
     let mut total = 0;
-
     let from_key = ValueKey::from(ValueClass::TaskQueue(TaskQueueClass::Due {
-        id: 0,
+        id: from_id,
         due: due_from,
     }));
     let to_key = ValueKey::from(ValueClass::TaskQueue(TaskQueueClass::Due {
-        id: u64::MAX,
+        id: to_id,
         due: due_to,
     }));
 

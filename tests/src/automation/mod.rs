@@ -7,6 +7,7 @@
 pub mod acme;
 pub mod dkim;
 pub mod dns;
+pub mod rfc2136;
 
 use registry::{
     schema::{
@@ -22,6 +23,7 @@ use crate::utils::server::TestServerBuilder;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn automation_tests() {
+    crate::utils::containers::ensure_acme().await;
     let mut test = TestServerBuilder::new("automation_tests")
         .await
         .with_listener(NetworkListenerProtocol::Http, "http", 8898, false)
@@ -116,4 +118,5 @@ async fn automation_tests() {
     acme::test(&test).await;
     dkim::test(&test).await;
     dns::test(&test).await;
+    rfc2136::test(&test).await;
 }

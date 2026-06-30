@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
-use crate::utils::{account::Account, jmap::JmapUtils, server::TestServer, smtp::SmtpConnection};
+use crate::utils::{
+    account::Account, http::HttpRequest, jmap::JmapUtils, server::TestServer, smtp::SmtpConnection,
+};
 use email::{cache::MessageCacheFetch, mailbox::INBOX_ID};
 use jmap::blob::upload::DISABLE_UPLOAD_QUOTA;
 use jmap_client::{
@@ -102,6 +104,9 @@ pub async fn test(test: &mut TestServer) {
     // Test temporary blob quota (3 files)
     DISABLE_UPLOAD_QUOTA.store(false, std::sync::atomic::Ordering::Relaxed);
     let client = account.jmap_client().await;
+    let raw_http =
+        HttpRequest::with_credentials(8899, "user1@example.org", "this is a very strong password1");
+    let upload_url = format!("/jmap/upload/{account_id}");
     for i in 0..3 {
         assert_eq!(
             client
@@ -112,14 +117,45 @@ pub async fn test(test: &mut TestServer) {
             1024
         );
     }
-    match client
-        .upload(None, vec![b'Z'; 1024], None)
-        .await
-        .unwrap_err()
-    {
-        jmap_client::Error::Problem(err) if err.detail().unwrap().contains("quota") => (),
-        other => panic!("Unexpected error: {:?}", other),
-    }
+    let resp = raw_http
+        .send_full(
+            hyper::Method::POST,
+            &upload_url,
+            Some(vec![b'Z'; 1024]),
+            Some("application/octet-stream"),
+        )
+        .await;
+    assert_eq!(
+        resp.status.as_u16(),
+        429,
+        "blob-files-quota body: {}",
+        resp.body
+    );
+    let policy = resp
+        .rate_limit_policy()
+        .unwrap_or_else(|| panic!("missing RateLimit-Policy on {:?}", resp.headers));
+    assert!(
+        policy.contains("\"blob-upload-files\";q=3"),
+        "RateLimit-Policy = {policy}"
+    );
+    assert!(
+        policy.contains("\"blob-upload-bytes\";q=50000")
+            && policy.contains(r#"qu="content-bytes""#),
+        "RateLimit-Policy = {policy}"
+    );
+    let state = resp
+        .rate_limit()
+        .unwrap_or_else(|| panic!("missing RateLimit on {:?}", resp.headers));
+    assert!(
+        state.contains("\"blob-upload-files\";r=0") && state.contains("t="),
+        "RateLimit = {state}"
+    );
+    assert!(
+        resp.retry_after().is_some(),
+        "missing Retry-After on {:?}",
+        resp.headers
+    );
+    assert!(resp.body.contains("quota"), "body = {}", resp.body);
     test.blob_expire_all().await;
 
     // Test temporary blob quota (50000 bytes)
@@ -134,14 +170,40 @@ pub async fn test(test: &mut TestServer) {
             25000
         );
     }
-    match client
-        .upload(None, vec![b'z'; 1024], None)
-        .await
-        .unwrap_err()
-    {
-        jmap_client::Error::Problem(err) if err.detail().unwrap().contains("quota") => (),
-        other => panic!("Unexpected error: {:?}", other),
-    }
+    let resp = raw_http
+        .send_full(
+            hyper::Method::POST,
+            &upload_url,
+            Some(vec![b'z'; 1024]),
+            Some("application/octet-stream"),
+        )
+        .await;
+    assert_eq!(
+        resp.status.as_u16(),
+        429,
+        "blob-bytes-quota body: {}",
+        resp.body
+    );
+    let policy = resp
+        .rate_limit_policy()
+        .unwrap_or_else(|| panic!("missing RateLimit-Policy on {:?}", resp.headers));
+    assert!(
+        policy.contains("\"blob-upload-bytes\";q=50000")
+            && policy.contains(r#"qu="content-bytes""#),
+        "RateLimit-Policy = {policy}"
+    );
+    let state = resp
+        .rate_limit()
+        .unwrap_or_else(|| panic!("missing RateLimit on {:?}", resp.headers));
+    assert!(
+        state.contains("\"blob-upload-bytes\";r=0") && state.contains("t="),
+        "RateLimit = {state}"
+    );
+    assert!(
+        resp.retry_after().is_some(),
+        "missing Retry-After on {:?}",
+        resp.headers
+    );
     test.blob_expire_all().await;
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
@@ -150,6 +212,7 @@ pub async fn test(test: &mut TestServer) {
         .jmap_method_call(
             "Quota/get",
             json!({
+                "accountId": account.id_string(),
                 "ids": null
             }),
         )
@@ -203,6 +266,7 @@ pub async fn test(test: &mut TestServer) {
         .jmap_method_call(
             "Quota/get",
             json!({
+                "accountId": account.id_string(),
                 "ids": null
             }),
         )

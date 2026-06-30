@@ -41,7 +41,7 @@ impl ContactCardGet for Server {
         mut request: GetRequest<contact::ContactCard>,
         access_token: &AccessToken,
     ) -> trc::Result<GetResponse<contact::ContactCard>> {
-        let ids = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let return_all_properties = request
             .properties
             .as_ref()
@@ -74,7 +74,7 @@ impl ContactCardGet for Server {
             account_id: request.account_id.into(),
             state: cache.get_state(false).into(),
             list: Vec::with_capacity(ids.len()),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
         let mut return_id = return_all_properties;
         let mut return_address_book_ids = return_all_properties;
@@ -101,7 +101,7 @@ impl ContactCardGet for Server {
             // Obtain the contact object
             let document_id = id.document_id();
             if !contact_ids.contains(document_id) {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             }
 
@@ -116,7 +116,7 @@ impl ContactCardGet for Server {
             {
                 contact
             } else {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             };
 

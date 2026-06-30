@@ -245,6 +245,10 @@ impl<T: SessionStream> Session<T> {
                     .handle_id(request)
                     .await
                     .map(|_| SessionResult::Continue),
+                Command::GetJmapAccess => self
+                    .handle_jmap_access(request)
+                    .await
+                    .map(|_| SessionResult::Continue),
             };
 
             match result {
@@ -375,7 +379,8 @@ impl<T: SessionStream> Session<T> {
             | Command::MyRights
             | Command::Unauthenticate
             | Command::GetQuota
-            | Command::GetQuotaRoot => {
+            | Command::GetQuotaRoot
+            | Command::GetJmapAccess => {
                 if let State::Authenticated { .. } | State::Selected { .. } = state {
                     Ok(request)
                 } else {

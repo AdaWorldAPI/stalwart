@@ -11,7 +11,7 @@ use crate::{
     },
     utils::{dns::DnsCache, server::TestServerBuilder},
 };
-use mail_auth::MX;
+use mail_auth::{DnssecStatus, MX};
 use registry::{
     schema::{
         enums::MtaRequiredOrOptional,
@@ -119,6 +119,7 @@ async fn starttls_optional() {
             exchanges: vec!["mx.foobar.org".into()].into_boxed_slice(),
             preference: 10,
         }],
+        DnssecStatus::Secure,
         Instant::now() + Duration::from_secs(10),
     );
     local.server.ipv4_add(

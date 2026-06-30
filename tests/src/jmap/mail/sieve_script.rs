@@ -339,6 +339,49 @@ pub async fn test(test: &TestServer) {
     )
     .await;
 
+    client
+        .sieve_script_create(
+            "Test Script",
+            concat!(
+                "require \"reject\";\n",
+                "reject \"Rejected from a mixed-case included script.\";\n",
+                "stop;\n"
+            )
+            .as_bytes()
+            .to_vec(),
+            false,
+        )
+        .await
+        .unwrap();
+    client
+        .sieve_script_create("test_include_case", get_script("test_include_case"), true)
+        .await
+        .unwrap();
+    lmtp.ingest(
+        "bill@remote.org",
+        &["jdoe@example.com"],
+        concat!(
+            "From: bill@remote.org\r\n",
+            "Bcc: Undisclosed recipients;\r\n",
+            "Message-ID: <5678@example.com>\r\n",
+            "Subject: Holidays\r\n",
+            "\r\n",
+            "Remember to file your T.P.S. reports before ",
+            "going on holidays."
+        ),
+    )
+    .await;
+
+    assert_message_delivery(
+        &mut smtp_rx,
+        MockMessage::new(
+            "<>",
+            ["<bill@remote.org>"],
+            "@Rejected from a mixed-case included script",
+        ),
+    )
+    .await;
+
     // Run include global tests
     client
         .sieve_script_create(

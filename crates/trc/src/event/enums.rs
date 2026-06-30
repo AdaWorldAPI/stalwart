@@ -6,8 +6,8 @@
 
 // This file is auto-generated. Do not edit directly.
 
-pub const TOTAL_EVENT_COUNT: usize = 605;
-pub const TOTAL_METRIC_COUNT: usize = 339;
+pub const TOTAL_EVENT_COUNT: usize = 606;
+pub const TOTAL_METRIC_COUNT: usize = 340;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventType {
@@ -156,6 +156,7 @@ pub enum DaneEvent {
     TlsaRecordNotFound = 75,
     TlsaRecordNotDnssecSigned = 74,
     TlsaRecordInvalid = 72,
+    BogusDnssecRecord = 605,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -912,6 +913,7 @@ pub enum MetricType {
     DaneTlsaRecordNotFound = 61,
     DaneTlsaRecordNotDnssecSigned = 62,
     DaneTlsaRecordInvalid = 63,
+    DaneBogusDnssecRecord = 339,
     DeliveryTotalTime = 2,
     DeliveryAttemptTime = 3,
     DeliveryActiveConnections = 22,

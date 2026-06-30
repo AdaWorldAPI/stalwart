@@ -260,10 +260,9 @@ async fn update_spam_rules(server: &Server) -> trc::Result<TaskResult> {
     }
 
     if reload_lookups {
-        if let Err(err) = Box::pin(
-            server.reload_registry(RegistryChange::Reload(ObjectType::MemoryLookupKey)),
-        )
-        .await
+        if let Err(err) =
+            Box::pin(server.reload_registry(RegistryChange::Reload(ObjectType::MemoryLookupKey)))
+                .await
         {
             trc::error!(err.details("Failed to reload registry after updating spam rules"));
         }

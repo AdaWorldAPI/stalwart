@@ -76,7 +76,15 @@ impl OpenIdDirectory {
                     }
 
                     self.validate_scopes(&token_data.claims)?;
-                    return self.build_account(&token_data.claims);
+
+                    let (email, claims) = if let Ok(email) = self.resolve_email(&token_data.claims)
+                    {
+                        (email, token_data.claims)
+                    } else {
+                        let claims = self.fetch_userinfo(token).await?;
+                        (self.resolve_email(&claims)?, claims)
+                    };
+                    return self.build_account(email, &claims);
                 }
                 Err(e) => {
                     last_err = Some(e);
@@ -92,7 +100,7 @@ impl OpenIdDirectory {
 
     async fn authenticate_opaque(&self, token: &str) -> Result<Account, OidcError> {
         let claims = self.fetch_userinfo(token).await?;
-        self.build_account(&claims)
+        self.build_account(self.resolve_email(&claims)?, &claims)
     }
 
     async fn get_key(&self, kid: Option<&str>) -> Result<Vec<Arc<CachedKey>>, OidcError> {
@@ -190,9 +198,13 @@ impl OpenIdDirectory {
         Ok(())
     }
 
-    fn build_account(&self, claims: &serde_json::Value) -> Result<Account, OidcError> {
+    fn build_account(
+        &self,
+        email: String,
+        claims: &serde_json::Value,
+    ) -> Result<Account, OidcError> {
         Ok(Account {
-            email: self.resolve_email(claims)?,
+            email,
             email_aliases: Vec::new(),
             secret: None,
             groups: self
@@ -201,7 +213,13 @@ impl OpenIdDirectory {
                 .as_ref()
                 .and_then(|groups_claim| claims.get(groups_claim))
                 .map(extract_string_list)
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into_iter()
+                .map(|group| match &self.config.default_domain {
+                    Some(domain) if !group.contains('@') => format!("{group}@{domain}"),
+                    _ => group,
+                })
+                .collect(),
             description: self
                 .config
                 .claim_name

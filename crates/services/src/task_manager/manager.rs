@@ -40,7 +40,7 @@ use store::rand::seq::SliceRandom;
 use store::write::key::DeserializeBigEndian;
 use store::{
     IterateParams, ValueKey,
-    write::{BatchBuilder, TaskQueueClass, ValueClass, now},
+    write::{BatchBuilder, TaskQueueClass, ValueClass, assert::AssertValue, now},
 };
 use store::{SerializeInfallible, U64_LEN, rand};
 use tokio::sync::{mpsc, watch};
@@ -574,6 +574,10 @@ async fn update_tasks(
                     u64::MAX
                 };
                 batch
+                    .assert_value(
+                        ValueClass::TaskQueue(TaskQueueClass::Task { id }),
+                        AssertValue::Some,
+                    )
                     .set(
                         ValueClass::TaskQueue(TaskQueueClass::Due { id, due }),
                         task.info.typ.to_id().serialize(),
@@ -587,7 +591,14 @@ async fn update_tasks(
     }
 
     if let Err(err) = server.store().write(batch.build_all()).await {
-        trc::error!(err.details("Failed to remove task(s) from queue."));
+        if err.matches(trc::EventType::Store(trc::StoreEvent::AssertValueFailed)) {
+            trc::event!(
+                TaskManager(TaskManagerEvent::TaskIgnored),
+                Reason = "Task was deleted while being processed; skipping update.",
+            );
+        } else {
+            trc::error!(err.details("Failed to remove task(s) from queue."));
+        }
     }
 
     for task in tasks {

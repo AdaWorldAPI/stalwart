@@ -6,7 +6,7 @@
 
 use super::get::ChangesLookup;
 use crate::{
-    api::request::set_account_id_if_missing, calendar_event::query::CalendarEventQuery,
+    api::request::resolve_account_id, calendar_event::query::CalendarEventQuery,
     calendar_event_notification::query::CalendarEventNotificationQuery,
     contact::query::ContactCardQuery, email::query::EmailQuery, file::query::FileNodeQuery,
     mailbox::query::MailboxQuery, share_notification::query::ShareNotificationQuery,
@@ -47,7 +47,7 @@ impl QueryChanges for Server {
         match request {
             QueryChangesRequestMethod::Email(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(&mut request.account_id, MethodObject::Email, access_token)?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -75,7 +75,7 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::Mailbox(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(&mut request.account_id, MethodObject::Mailbox, access_token)?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -97,7 +97,11 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::EmailSubmission(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::EmailSubmission,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -119,7 +123,11 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::ContactCard(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::ContactCard,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -143,7 +151,11 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::FileNode(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::FileNode,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -161,11 +173,17 @@ impl QueryChanges for Server {
                 }
 
                 up_to_id = request.up_to_id;
-                results = self.file_node_query((*request).into(), access_token).await?;
+                results = self
+                    .file_node_query((*request).into(), access_token)
+                    .await?;
             }
             QueryChangesRequestMethod::CalendarEvent(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::CalendarEvent,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -189,7 +207,11 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::CalendarEventNotification(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::CalendarEventNotification,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),
@@ -213,7 +235,11 @@ impl QueryChanges for Server {
             }
             QueryChangesRequestMethod::ShareNotification(mut request) => {
                 // Query changes
-                set_account_id_if_missing(&mut request.account_id, access_token);
+                resolve_account_id(
+                    &mut request.account_id,
+                    MethodObject::ShareNotification,
+                    access_token,
+                )?;
                 changes = self
                     .changes(
                         build_changes_request(&request),

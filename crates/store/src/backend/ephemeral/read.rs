@@ -78,11 +78,7 @@ impl EphemeralStore {
             .and_then(|m| m.get(&key_bytes))
         {
             Some(bytes) => Ok(i64::from_le_bytes(bytes[..].try_into().map_err(|_| {
-                trc::Error::corrupted_key(
-                    &key_bytes,
-                    Some(bytes.as_slice()),
-                    trc::location!(),
-                )
+                trc::Error::corrupted_key(&key_bytes, Some(bytes.as_slice()), trc::location!())
             })?)),
             None => Ok(0),
         }

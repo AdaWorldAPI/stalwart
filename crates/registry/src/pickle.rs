@@ -22,6 +22,7 @@ pub trait Pickle: Sized {
 pub struct PickledStream<'x> {
     data: Cow<'x, [u8]>,
     pos: usize,
+    version: u8,
 }
 
 pub(crate) fn maybe_compress_pickle(input: Vec<u8>) -> Vec<u8> {
@@ -54,17 +55,20 @@ pub(crate) fn maybe_compress_pickle(input: Vec<u8>) -> Vec<u8> {
 impl<'x> PickledStream<'x> {
     pub fn new(data: &'x [u8]) -> Option<Self> {
         let (marker, data) = data.split_first()?;
+        let version = marker & !COMPRESS_MARKER;
         if marker & COMPRESS_MARKER != 0 {
             lz4_flex::block::decompress_size_prepended(data)
                 .ok()
                 .map(|data| PickledStream {
                     data: Cow::Owned(data),
                     pos: 0,
+                    version,
                 })
         } else {
             PickledStream {
                 data: Cow::Borrowed(data),
                 pos: 0,
+                version,
             }
             .into()
         }
@@ -84,22 +88,26 @@ impl<'x> PickledStream<'x> {
             })
     }
 
+    #[inline(always)]
     pub fn read_bytes(&mut self, len: usize) -> Option<&'_ [u8]> {
         self.data.get(self.pos..self.pos + len).inspect(|_| {
             self.pos += len;
         })
     }
 
+    #[inline(always)]
     pub fn eof(&self) -> bool {
         self.pos >= self.data.len()
     }
 
+    #[inline(always)]
     pub fn bytes(&self) -> &'_ [u8] {
         self.data.as_ref()
     }
 
-    pub fn assert_version(&mut self, expected: u8) -> Option<u8> {
-        self.read().filter(|&version| version == expected)
+    #[inline(always)]
+    pub fn version(&self) -> u8 {
+        self.version
     }
 }
 

@@ -11,7 +11,7 @@ use jmap_proto::{
     method::set::{SetRequest, SetResponse},
     object::identity::{self, IdentityProperty, IdentityValue},
     references::resolve::ResolveCreatedReference,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::state::State,
 };
 use jmap_tools::{Key, Value};
@@ -25,6 +25,7 @@ use trc::AddContext;
 use types::{
     collection::{Collection, SyncCollection},
     field::{Field, IdentityField},
+    id::Id,
 };
 use utils::sanitize_email;
 
@@ -45,7 +46,7 @@ impl IdentitySet for Server {
             .document_ids(account_id, Collection::Identity, IdentityField::DocumentId)
             .await?;
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
         let account_info = self
             .account_info(account_id)
             .await
@@ -59,7 +60,9 @@ impl IdentitySet for Server {
             for (property, mut value) in object.into_expanded_object() {
                 if let Err(err) = response
                     .resolve_self_references(&mut value, 0, false)
-                    .and_then(|_| validate_identity_value(&property, value, &mut identity, true))
+                    .and_then(|_| {
+                        validate_identity_value(None, &property, value, &mut identity, true)
+                    })
                 {
                     response.not_created.append(id, err);
                     continue 'create;
@@ -128,7 +131,14 @@ impl IdentitySet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -162,7 +172,13 @@ impl IdentitySet for Server {
                 if let Err(err) = response
                     .resolve_self_references(&mut value, 0, false)
                     .and_then(|_| {
-                        validate_identity_value(&property, value, &mut new_identity, false)
+                        validate_identity_value(
+                            Some(id),
+                            &property,
+                            value,
+                            &mut new_identity,
+                            false,
+                        )
                     })
                 {
                     response.not_updated.append(id, err);
@@ -220,6 +236,7 @@ impl IdentitySet for Server {
 }
 
 fn validate_identity_value(
+    expected_id: Option<Id>,
     property: &Key<'_, IdentityProperty>,
     value: Value<'_, IdentityProperty, IdentityValue>,
     identity: &mut Identity,
@@ -309,6 +326,13 @@ fn validate_identity_value(
         }
         (IdentityProperty::ReplyTo, Value::Null) => identity.reply_to = None,
         (IdentityProperty::Bcc, Value::Null) => identity.bcc = None,
+        (IdentityProperty::Id, value) => {
+            if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                return Err(SetError::invalid_properties()
+                    .with_property(IdentityProperty::Id)
+                    .with_description("The id property is immutable."));
+            }
+        }
         (property, _) => {
             return Err(SetError::invalid_properties()
                 .with_property(property.clone())

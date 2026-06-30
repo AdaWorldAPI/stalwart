@@ -193,19 +193,14 @@ impl ArchivedMessageMetadata {
                                         });
                                     }
                                     _ => {
-                                        if (matches!(
-                                            header.value,
-                                            ArchivedMetadataHeaderValue::ContentType(_)
-                                        ) || matches!(
-                                            header.name,
-                                            ArchivedMetadataHeaderName::Received
-                                        )) && let Some(header) =
+                                        if let Some(raw_value) =
                                             raw_message.get(header.value_range())
                                         {
-                                            let header = std::str::from_utf8(header.as_ref())
+                                            let raw_value = std::str::from_utf8(raw_value.as_ref())
                                                 .unwrap_or_default();
 
-                                            for word in WordTokenizer::new(header, MAX_TOKEN_LENGTH)
+                                            for word in
+                                                WordTokenizer::new(raw_value, MAX_TOKEN_LENGTH)
                                             {
                                                 if !value.is_empty() {
                                                     value.push(' ');

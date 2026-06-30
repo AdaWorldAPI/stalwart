@@ -31,14 +31,18 @@ impl WebSocketUpgrade for Server {
         session: HttpSessionData,
     ) -> trc::Result<HttpResponse> {
         let headers = req.headers();
-        if headers
-            .get(hyper::header::CONNECTION)
-            .and_then(|h| h.to_str().ok())
-            != Some("Upgrade")
-            || headers
-                .get(hyper::header::UPGRADE)
+        let header_has_token = |name: hyper::header::HeaderName, token: &str| {
+            headers
+                .get(name)
                 .and_then(|h| h.to_str().ok())
-                != Some("websocket")
+                .is_some_and(|value| {
+                    value
+                        .split(',')
+                        .any(|part| part.trim().eq_ignore_ascii_case(token))
+                })
+        };
+        if !header_has_token(hyper::header::CONNECTION, "Upgrade")
+            || !header_has_token(hyper::header::UPGRADE, "websocket")
         {
             return Err(trc::ResourceEvent::BadParameters
                 .into_err()

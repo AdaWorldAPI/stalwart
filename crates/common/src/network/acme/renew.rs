@@ -14,17 +14,20 @@ use crate::{
 use registry::{
     schema::{
         enums::{AcmeChallengeType, AcmeRenewBefore, DnsRecordType},
-        prelude::ObjectType,
+        prelude::{ObjectType, Property},
         structs::{
             AcmeProvider, Certificate, CertificateManagement, DnsManagement, Domain, PublicText,
-            PublicTextValue, SecretText, SecretTextValue, Task, TaskDnsManagement,
+            PublicTextValue, SecretText, SecretTextValue, SystemSettings, Task, TaskDnsManagement,
             TaskDomainManagement, TaskStatus,
         },
     },
     types::{datetime::UTCDateTime, id::ObjectId, map::Map},
 };
 use store::{
-    registry::write::{RegistryWrite, RegistryWriteResult},
+    registry::{
+        RegistryQuery,
+        write::{RegistryWrite, RegistryWriteResult},
+    },
     write::now,
 };
 use types::id::Id;
@@ -55,10 +58,29 @@ impl Server {
                 cert.acme_provider_id
             )));
         };
+        let challenge_type = acme_provider.challenge_type;
+        let renew_before = acme_provider.renew_before;
+        let reuse_key = acme_provider.reuse_key;
+        let request = AcmeRequestBuilder::new(acme_provider).await?;
+        let domains = request.build_domains(
+            self,
+            &domain.name,
+            &cert.subject_alternative_names.into_inner(),
+        );
+
+        if let Some(renew_at) = self
+            .acme_certificate_renewal_due(&domains, renew_before, now())
+            .await?
+        {
+            return Err(AcmeError::NotDue(format!(
+                "Certificate for domain {} is still valid; renewal is not due until {}",
+                domain.name,
+                UTCDateTime::from_timestamp(renew_at as i64)
+            )));
+        }
+
         let dns_parameters = match &domain.dns_management {
-            DnsManagement::Automatic(props)
-                if acme_provider.challenge_type == AcmeChallengeType::Dns01 =>
-            {
+            DnsManagement::Automatic(props) if challenge_type == AcmeChallengeType::Dns01 => {
                 match self.build_dns_updater(props.dns_server_id).await? {
                     Ok(updater) => Some(AcmeDnsParameters {
                         updater,
@@ -74,23 +96,34 @@ impl Server {
             }
             _ => None,
         };
-        if acme_provider.challenge_type == AcmeChallengeType::Dns01 && dns_parameters.is_none() {
+        if challenge_type == AcmeChallengeType::Dns01 && dns_parameters.is_none() {
             return Err(AcmeError::Invalid(
                 "ACME provider requires DNS challenge but a DNS provider was not configured"
                     .to_string(),
             ));
         }
-        let renew_before = acme_provider.renew_before;
-        let pem_cert = AcmeRequestBuilder::new(acme_provider)
-            .await?
-            .renew(
-                self,
-                &domain.name,
-                &cert.subject_alternative_names.into_inner(),
-                dns_parameters,
-            )
+        let reuse_key_pem = if reuse_key {
+            match self.acme_certificate_by_domains(&domains).await? {
+                Some(certificate) => certificate
+                    .private_key
+                    .secret()
+                    .await
+                    .map(std::borrow::Cow::into_owned)
+                    .map_err(|err| {
+                        AcmeError::Crypto(format!("Failed to load certificate private key: {err}"))
+                    })?
+                    .into(),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let pem_cert = request
+            .renew(self, domains, reuse_key_pem, dns_parameters)
             .await?;
         let parsed_cert = ParsedCert::parse(&pem_cert.certificate)?;
+        let mut new_sans = parsed_cert.sans.clone();
+        new_sans.sort();
         let certificate = Certificate {
             private_key: SecretText::Text(SecretTextValue {
                 secret: pem_cert.private_key,
@@ -118,35 +151,58 @@ impl Server {
             .await?
         {
             RegistryWriteResult::Success(id) => {
+                // Repoint the default certificate to the renewed object when it
+                // tracks the same SAN set, so its id does not go stale
+                if let Some(old) = self
+                    .registry()
+                    .get(ObjectType::SystemSettings.singleton())
+                    .await?
+                {
+                    let mut settings = SystemSettings::from(old.clone());
+                    if let Some(default_id) = settings.default_certificate_id
+                        && let Some(default_cert) =
+                            self.registry().object::<Certificate>(default_id).await?
+                    {
+                        let mut default_sans =
+                            default_cert.subject_alternative_names.clone().into_inner();
+                        default_sans.sort();
+                        if default_sans == new_sans {
+                            settings.default_certificate_id = Some(id);
+                            if let Err(err) = self
+                                .registry()
+                                .write(RegistryWrite::update(
+                                    Id::singleton(),
+                                    &settings.into(),
+                                    &old,
+                                ))
+                                .await
+                            {
+                                trc::error!(
+                                    err.details(
+                                        "Failed to update default certificate after ACME renewal."
+                                    )
+                                    .caused_by(trc::location!())
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Reload registry
                 let change = RegistryChange::Insert(ObjectId::new(ObjectType::Certificate, id));
                 Box::pin(self.reload_registry(change)).await?;
                 self.cluster_broadcast(BroadcastEvent::RegistryChange(change))
                     .await;
 
-                // Schedule next renewal
                 let mut tasks = Vec::new();
-                let renew_in = match renew_before {
-                    AcmeRenewBefore::R12 => {
-                        // 1/2 of the remaining time until expiration
-                        expires_in / 2
-                    }
-                    AcmeRenewBefore::R23 => {
-                        // 2/3 of the remaining time until expiration
-                        expires_in * 2 / 3
-                    }
-                    AcmeRenewBefore::R34 => {
-                        // 3/4 of the remaining time until expiration
-                        expires_in * 3 / 4
-                    }
-                    AcmeRenewBefore::R45 => {
-                        // 4/5 of the remaining time until expiration
-                        expires_in * 4 / 5
-                    }
-                };
+                let renew_at = Self::acme_renewal_due_at(
+                    parsed_cert.valid_not_before.timestamp(),
+                    parsed_cert.valid_not_after.timestamp(),
+                    renew_before,
+                );
                 tasks.push(Task::AcmeRenewal(TaskDomainManagement {
                     domain_id,
-                    status: TaskStatus::at((now + renew_in) as i64),
+                    status: TaskStatus::at(renew_at),
                 }));
 
                 // Update TLSA records
@@ -165,5 +221,79 @@ impl Server {
             }
             err => Err(AcmeError::Registry(err)),
         }
+    }
+
+    async fn acme_certificate_by_domains(
+        &self,
+        domains: &[String],
+    ) -> AcmeResult<Option<Certificate>> {
+        let mut wanted = domains.iter().collect::<Vec<_>>();
+        wanted.sort();
+        let Some(reference) = wanted.first() else {
+            return Ok(None);
+        };
+
+        let candidate_ids = self
+            .registry()
+            .query::<Vec<Id>>(
+                RegistryQuery::new(ObjectType::Certificate)
+                    .text(Property::SubjectAlternativeNames, reference.as_str()),
+            )
+            .await?;
+
+        for id in candidate_ids {
+            let Some(certificate) = self.registry().object::<Certificate>(id).await? else {
+                continue;
+            };
+            let mut sans = certificate
+                .subject_alternative_names
+                .iter()
+                .collect::<Vec<_>>();
+            sans.sort();
+            if sans == wanted {
+                return Ok(Some(certificate));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn acme_certificate_renewal_due(
+        &self,
+        domains: &[String],
+        renew_before: AcmeRenewBefore,
+        now: u64,
+    ) -> AcmeResult<Option<u64>> {
+        let now = now as i64;
+        let Some(certificate) = self.acme_certificate_by_domains(domains).await? else {
+            return Ok(None);
+        };
+
+        let not_valid_after = certificate.not_valid_after.timestamp();
+        if not_valid_after <= now {
+            return Ok(None);
+        }
+        let not_valid_before = certificate.not_valid_before.timestamp();
+        let renew_at = Self::acme_renewal_due_at(not_valid_before, not_valid_after, renew_before);
+        Ok(if now < renew_at {
+            Some(renew_at as u64)
+        } else {
+            None
+        })
+    }
+
+    fn acme_renewal_due_at(
+        not_valid_before: i64,
+        not_valid_after: i64,
+        renew_before: AcmeRenewBefore,
+    ) -> i64 {
+        let total = not_valid_after.saturating_sub(not_valid_before);
+        let (numerator, denominator) = match renew_before {
+            AcmeRenewBefore::R12 => (1, 2),
+            AcmeRenewBefore::R23 => (2, 3),
+            AcmeRenewBefore::R34 => (3, 4),
+            AcmeRenewBefore::R45 => (4, 5),
+        };
+        not_valid_before + total * numerator / denominator
     }
 }

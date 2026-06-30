@@ -181,7 +181,7 @@ impl DavProperty {
                     CardDavProperty::SupportedAddressData => "B:supported-address-data",
                     CardDavProperty::SupportedCollationSet => "B:supported-collation-set",
                     CardDavProperty::MaxResourceSize => "B:max-resource-size",
-                    CardDavProperty::AddressData(_) => "B:address-data",
+                    CardDavProperty::AddressData { .. } => "B:address-data",
                 },
                 DavProperty::CalDav(prop) => match prop {
                     CalDavProperty::CalendarDescription => "A:calendar-description",

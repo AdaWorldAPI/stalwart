@@ -9,7 +9,7 @@ use common::{Server, auth::AccessToken};
 use jmap_proto::{
     error::set::{SetError, SetErrorType},
     method::copy::{CopyBlobRequest, CopyBlobResponse},
-    request::IntoValid,
+    request::MaybeInvalid,
 };
 use registry::schema::enums::Permission;
 use std::future::Future;
@@ -40,7 +40,19 @@ impl BlobCopy for Server {
         };
         let account_id = request.account_id.document_id();
 
-        for blob_id in request.blob_ids.into_valid() {
+        for blob_id in request.blob_ids {
+            let blob_id = match blob_id {
+                MaybeInvalid::Value(blob_id) => blob_id,
+                invalid => {
+                    response.not_copied.append(
+                        invalid,
+                        SetError::new(SetErrorType::BlobNotFound).with_description(
+                            "blobId does not exist or not enough permissions to access it.",
+                        ),
+                    );
+                    continue;
+                }
+            };
             if self.has_access_blob(&blob_id, access_token).await? {
                 // Enforce quota
                 if !access_token.has_permission(Permission::UnlimitedUploads)
@@ -48,6 +60,7 @@ impl BlobCopy for Server {
                         .blob_has_quota(account_id, 1)
                         .await
                         .caused_by(trc::location!())?
+                        .allowed
                 {
                     response.not_copied.append(
                         blob_id,

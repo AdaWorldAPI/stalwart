@@ -19,7 +19,7 @@ use jmap_proto::{
     method::set::{SetRequest, SetResponse},
     object::sieve::{Sieve, SieveProperty, SieveValue},
     references::resolve::ResolveCreatedReference,
-    request::{IntoValid, reference::MaybeIdReference},
+    request::{MaybeInvalid, reference::MaybeIdReference},
     types::state::State,
 };
 use jmap_tools::{Key, Map, Value};
@@ -91,7 +91,7 @@ impl SieveScriptSet for Server {
                     .await?,
                 ),
         };
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = ctx.response.collect_will_destroy(request.unwrap_destroy());
 
         // Validate active script id
         if let Some(MaybeIdReference::Id(id)) = &request.arguments.on_success_activate_script
@@ -197,7 +197,16 @@ impl SieveScriptSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    ctx.response
+                        .not_updated
+                        .append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 ctx.response
@@ -473,6 +482,17 @@ impl SieveScriptSet for Server {
                 (Key::Property(SieveProperty::IsActive), Value::Bool(value)) => {
                     set_item = Some(value);
                     continue;
+                }
+                (Key::Property(SieveProperty::Id), value) => {
+                    if update
+                        .as_ref()
+                        .map(|(document_id, _)| Id::from(*document_id))
+                        .is_none_or(|expected| !crate::matches_id(&value, expected))
+                    {
+                        return Ok(Err(SetError::invalid_properties()
+                            .with_property(SieveProperty::Id)
+                            .with_description("The id property is immutable.".to_string())));
+                    }
                 }
                 _ => {
                     return Ok(Err(SetError::invalid_properties()

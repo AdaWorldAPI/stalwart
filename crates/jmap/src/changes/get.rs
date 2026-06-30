@@ -6,7 +6,7 @@
 
 use crate::{api::auth::JmapAuthorization, changes::state::JmapCacheState};
 use common::{Server, auth::AccessToken};
-use email::cache::MessageCacheFetch;
+use email::cache::{MessageCacheFetch, email::MessageCacheAccess, mailbox::MailboxCacheAccess};
 use groupware::cache::GroupwareCache;
 use jmap_proto::{
     method::changes::{ChangesRequest, ChangesResponse},
@@ -16,9 +16,15 @@ use jmap_proto::{
     types::state::State,
 };
 use std::future::Future;
-use store::query::log::{Change, Query};
+use store::{
+    query::log::{Change, Query},
+    roaring::RoaringBitmap,
+};
 use trc::AddContext;
-use types::collection::{Collection, SyncCollection};
+use types::{
+    acl::Acl,
+    collection::{Collection, SyncCollection},
+};
 
 pub trait ChangesLookup: Sync + Send {
     fn changes(
@@ -126,6 +132,73 @@ impl ChangesLookup for Server {
         };
         let account_id = request.account_id.document_id();
 
+        let allowed_ids: Option<RoaringBitmap> = if access_token.is_member(account_id) {
+            None
+        } else {
+            Some(match object {
+                MethodObject::Email => self
+                    .get_cached_messages(account_id)
+                    .await?
+                    .shared_messages(access_token, Acl::ReadItems),
+                MethodObject::Mailbox => self
+                    .get_cached_messages(account_id)
+                    .await?
+                    .shared_mailboxes(access_token, Acl::Read),
+                MethodObject::Thread => {
+                    let cache = self.get_cached_messages(account_id).await?;
+                    let shared = cache.shared_messages(access_token, Acl::ReadItems);
+                    let mut threads = RoaringBitmap::new();
+                    for item in &cache.emails.items {
+                        if shared.contains(item.document_id) {
+                            threads.insert(item.thread_id);
+                        }
+                    }
+                    threads
+                }
+                MethodObject::AddressBook => self
+                    .fetch_dav_resources(
+                        access_token.account_id(),
+                        account_id,
+                        SyncCollection::AddressBook,
+                    )
+                    .await?
+                    .shared_containers(access_token, [Acl::Read, Acl::ReadItems], true),
+                MethodObject::ContactCard => self
+                    .fetch_dav_resources(
+                        access_token.account_id(),
+                        account_id,
+                        SyncCollection::AddressBook,
+                    )
+                    .await?
+                    .shared_items(access_token, [Acl::ReadItems], true),
+                MethodObject::Calendar => self
+                    .fetch_dav_resources(
+                        access_token.account_id(),
+                        account_id,
+                        SyncCollection::Calendar,
+                    )
+                    .await?
+                    .shared_containers(access_token, [Acl::Read, Acl::ReadItems], true),
+                MethodObject::CalendarEvent => self
+                    .fetch_dav_resources(
+                        access_token.account_id(),
+                        account_id,
+                        SyncCollection::Calendar,
+                    )
+                    .await?
+                    .shared_items(access_token, [Acl::ReadItems], true),
+                MethodObject::FileNode => self
+                    .fetch_dav_resources(
+                        access_token.account_id(),
+                        account_id,
+                        SyncCollection::FileNode,
+                    )
+                    .await?
+                    .shared_documents(access_token, [Acl::Read, Acl::ReadItems], true),
+                _ => RoaringBitmap::new(),
+            })
+        };
+
         let (items_sent, changelog) = match &request.since_state {
             State::Initial => {
                 let changelog = self
@@ -225,6 +298,16 @@ impl ChangesLookup for Server {
             .filter(|change| {
                 (is_container && change.is_container_change())
                     || (!is_container && change.is_item_change())
+            })
+            .filter(|change| {
+                allowed_ids.as_ref().is_none_or(|allowed| {
+                    let id = if is_container {
+                        change.container_id()
+                    } else {
+                        change.item_id()
+                    };
+                    id.is_some_and(|id| allowed.contains(id as u32))
+                })
             })
             .skip(items_sent)
             .peekable();

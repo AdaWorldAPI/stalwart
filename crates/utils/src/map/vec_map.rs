@@ -41,7 +41,8 @@ impl<K: Eq + PartialEq, V> VecMap<K, V> {
     }
 
     #[inline(always)]
-    pub fn set(&mut self, key: K, value: V) -> bool {
+    pub fn set(&mut self, key: impl Into<K>, value: V) -> bool {
+        let key = key.into();
         if let Some(kv) = self.inner.iter_mut().find(|kv| kv.key == key) {
             kv.value = value;
             false
@@ -52,19 +53,28 @@ impl<K: Eq + PartialEq, V> VecMap<K, V> {
     }
 
     #[inline(always)]
-    pub fn append(&mut self, key: K, value: V) {
-        self.inner.push(KeyValue { key, value });
+    pub fn append(&mut self, key: impl Into<K>, value: V) {
+        self.inner.push(KeyValue {
+            key: key.into(),
+            value,
+        });
     }
 
     #[inline(always)]
-    pub fn with_append(mut self, key: K, value: V) -> Self {
+    pub fn with_append(mut self, key: impl Into<K>, value: V) -> Self {
         self.append(key, value);
         self
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, idx: usize, key: K, value: V) {
-        self.inner.insert(idx, KeyValue { key, value });
+    pub fn insert(&mut self, idx: usize, key: impl Into<K>, value: V) {
+        self.inner.insert(
+            idx,
+            KeyValue {
+                key: key.into(),
+                value,
+            },
+        );
     }
 
     #[inline(always)]

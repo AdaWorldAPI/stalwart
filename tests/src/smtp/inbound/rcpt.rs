@@ -48,6 +48,12 @@ async fn rcpt() {
             "Mike Foobar",
             &[],
         ),
+        (
+            "cornelius@straß6.de",
+            "p4ssw0rd + extra safety",
+            "Cornelius Strauss",
+            &[],
+        ),
     ] {
         admin
             .create_user_account(name, secret, description, aliases, vec![])
@@ -189,4 +195,26 @@ async fn rcpt() {
     let rcpt = session.data.rcpt_to.last().unwrap();
     assert!((rcpt.flags & (RCPT_NOTIFY_DELAY | RCPT_NOTIFY_SUCCESS | RCPT_NOTIFY_FAILURE)) != 0);
     assert_eq!(rcpt.dsn_info.as_ref().unwrap(), "Jane.Doe@Foobar.org");
+
+    let mut session = test.new_mta_session();
+    session.data.remote_ip_str = "10.0.0.1".into();
+    session.eval_session_params().await;
+    session.ehlo("mx1.foobar.org").await;
+    session.mail_from("idn@example.net", "250").await;
+    session.rcpt_to("cornelius@straß6.de", "250").await;
+    session.rcpt_to("cornelius@xn--stra6-oqa.de", "250").await;
+    assert_eq!(session.data.rcpt_to.len(), 1);
+    let rcpt = session.data.rcpt_to.last().unwrap();
+    assert_eq!(rcpt.address_lcase, "cornelius@xn--stra6-oqa.de");
+    assert_eq!(rcpt.domain, "xn--stra6-oqa.de");
+
+    let mut session = test.new_mta_session();
+    session.data.remote_ip_str = "10.0.0.1".into();
+    session.eval_session_params().await;
+    session.ehlo("mx1.foobar.org").await;
+    session.mail_from("idn2@example.net", "250").await;
+    session.rcpt_to("nobody@straß6.de", "550 5.1.2").await;
+    session
+        .rcpt_to("nobody@xn--stra6-oqa.de", "550 5.1.2")
+        .await;
 }

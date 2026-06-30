@@ -11,7 +11,7 @@ use jmap_proto::{
     error::set::{SetError, SetErrorType},
     method::set::{SetRequest, SetResponse},
     object::participant_identity::{self, ParticipantIdentityProperty, ParticipantIdentityValue},
-    request::{IntoValid, reference::MaybeIdReference},
+    request::{MaybeInvalid, reference::MaybeIdReference},
 };
 use jmap_tools::{Key, Value};
 use registry::schema::prelude::StorageQuota;
@@ -21,7 +21,7 @@ use store::{
     write::{Archiver, BatchBuilder},
 };
 use trc::AddContext;
-use types::{collection::Collection, field::PrincipalField};
+use types::{collection::Collection, field::PrincipalField, id::Id};
 use utils::sanitize_email;
 
 pub trait ParticipantIdentitySet: Sync + Send {
@@ -38,7 +38,7 @@ impl ParticipantIdentitySet for Server {
     ) -> trc::Result<SetResponse<participant_identity::ParticipantIdentity>> {
         let account_id = request.account_id.document_id();
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
         let (identity_archive, mut identities) =
             match self.participant_identity_get_or_create(account_id).await? {
                 Some(archive) => {
@@ -68,7 +68,8 @@ impl ParticipantIdentitySet for Server {
         'create: for (id, object) in request.unwrap_create() {
             let mut identity = ParticipantIdentity::default();
 
-            if let Err(err) = validate_identity_value(object, &mut identity, &allowed_emails) {
+            if let Err(err) = validate_identity_value(None, object, &mut identity, &allowed_emails)
+            {
                 response.not_created.append(id, err);
                 continue 'create;
             }
@@ -126,7 +127,14 @@ impl ParticipantIdentitySet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -142,7 +150,7 @@ impl ParticipantIdentitySet for Server {
                 continue 'update;
             };
 
-            if let Err(err) = validate_identity_value(object, identity, &allowed_emails) {
+            if let Err(err) = validate_identity_value(Some(id), object, identity, &allowed_emails) {
                 response.not_updated.append(id, err);
                 continue 'update;
             }
@@ -200,6 +208,7 @@ impl ParticipantIdentitySet for Server {
 }
 
 fn validate_identity_value(
+    expected_id: Option<Id>,
     update: Value<'_, ParticipantIdentityProperty, ParticipantIdentityValue>,
     identity: &mut ParticipantIdentity,
     allowed_emails: &AHashSet<&str>,
@@ -238,6 +247,13 @@ fn validate_identity_value(
                             .with_property(ParticipantIdentityProperty::CalendarAddress)
                             .with_description("Invalid or missing calendar address.".to_string()));
                     }
+                }
+            }
+            (ParticipantIdentityProperty::Id, value) => {
+                if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                    return Err(SetError::invalid_properties()
+                        .with_property(ParticipantIdentityProperty::Id)
+                        .with_description("The id property is immutable."));
                 }
             }
             (property, _) => {

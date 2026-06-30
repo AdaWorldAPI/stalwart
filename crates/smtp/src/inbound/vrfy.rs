@@ -8,13 +8,14 @@ use crate::core::Session;
 use common::network::{RcptResolution, SessionStream};
 use std::{borrow::Cow, fmt::Write};
 use trc::SmtpEvent;
+use utils::DomainPart;
 
 impl<T: SessionStream> Session<T> {
     pub async fn handle_vrfy(&mut self, address: Cow<'_, str>) -> Result<(), ()> {
         if self.params.can_vrfy {
             match self
                 .server
-                .rcpt_resolve(&address.to_lowercase(), self.data.session_id)
+                .rcpt_resolve(&address.to_lowercase_address(true), self.data.session_id)
                 .await
             {
                 Ok(RcptResolution::Accept | RcptResolution::Rewrite(_)) => {
@@ -66,7 +67,7 @@ impl<T: SessionStream> Session<T> {
         if self.params.can_expn {
             match self
                 .server
-                .rcpt_resolve(&address.to_lowercase(), self.data.session_id)
+                .rcpt_resolve(&address.to_lowercase_address(true), self.data.session_id)
                 .await
             {
                 Ok(RcptResolution::Expand(addresses)) => {

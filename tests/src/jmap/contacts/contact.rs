@@ -370,6 +370,7 @@ pub async fn test(test: &TestServer) {
          [
           "Blob/upload",
           {
+           "accountId": account.id_string(),
            "create": {
             "vcard": {
              "data": [
@@ -390,6 +391,7 @@ END:VCARD"#
         [
           "ContactCard/parse",
           {
+           "accountId": account.id_string(),
            "blobIds": [
              "#vcard"
            ]

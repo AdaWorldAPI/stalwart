@@ -80,6 +80,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Principal/getAvailability",
             {
+                "accountId": &jane_id,
                 "id": &john_id,
                 "utcStart": "2006-01-01T00:00:00Z",
                 "utcEnd": "2006-01-08T00:00:00Z",
@@ -112,6 +113,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Principal/getAvailability",
             {
+                "accountId": &jane_id,
                 "id": &john_id,
                 "utcStart": "2006-01-01T00:00:00Z",
                 "utcEnd": "2006-01-08T00:00:00Z",
@@ -183,6 +185,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Principal/getAvailability",
             {
+                "accountId": &jane_id,
                 "id": &john_id,
                 "utcStart": "2006-01-01T00:00:00Z",
                 "utcEnd": "2006-01-08T00:00:00Z",
@@ -211,6 +214,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Principal/getAvailability",
             {
+                "accountId": &jane_id,
                 "id": &john_id,
                 "utcStart": "2006-01-01T00:00:00Z",
                 "utcEnd": "2006-01-08T00:00:00Z",
@@ -246,6 +250,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Principal/getAvailability",
             {
+                "accountId": &jane_id,
                 "id": &john_id,
                 "utcStart": "2006-01-01T00:00:00Z",
                 "utcEnd": "2006-01-08T00:00:00Z",

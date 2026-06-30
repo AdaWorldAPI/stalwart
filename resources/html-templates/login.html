@@ -334,8 +334,18 @@
                 state: params.get('state'),
                 nonce: params.get('nonce'),
                 code_challenge: params.get('code_challenge'),
-                code_challenge_method: params.get('code_challenge_method')
+                code_challenge_method: params.get('code_challenge_method'),
+                resource: params.getAll('resource')
             };
+
+            // This page is the OAuth authorization screen used by apps
+            if (!isDevice && !oauth.redirect_uri) {
+                hide($('login-form'));
+                setText($('title'), 'Sign in with an app');
+                setText($('subtitle'), 'This page is opened automatically by your mail, calendar or contacts app to authorize access to your account.');
+                showError('This sign-in page cannot be used directly. Please start the sign-in from your app instead. (The required "redirect_uri" parameter is missing.)');
+                return;
+            }
 
             // Prefill username from login_hint
             var loginHint = params.get('login_hint');
@@ -420,11 +430,12 @@
                 if (oauth.nonce) r.nonce = oauth.nonce;
                 if (oauth.code_challenge) r.codeChallenge = oauth.code_challenge;
                 if (oauth.code_challenge_method) r.codeChallengeMethod = oauth.code_challenge_method;
+                if (oauth.resource && oauth.resource.length) r.resource = oauth.resource;
                 if (otpValue) r.mfaToken = otpValue;
                 return r;
             }
 
-            function performRedirect(clientCode) {
+            function performRedirect(clientCode, issuer) {
                 // Build redirect_uri?code=<client_code>&state=<state>
                 var target;
                 try {
@@ -437,6 +448,7 @@
                 }
                 target.searchParams.set('code', clientCode);
                 if (oauth.state) target.searchParams.set('state', oauth.state);
+                target.searchParams.set('iss', issuer || url.origin);
                 window.location.assign(target.toString());
             }
 
@@ -453,7 +465,7 @@
                             showError('Temporary server failure. If the problem persists, contact your administrator.');
                             return;
                         }
-                        performRedirect(resp.client_code);
+                        performRedirect(resp.client_code, resp.iss);
                         return;
                     case 'verified':
                         hide($('login-form'));

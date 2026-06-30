@@ -13,7 +13,10 @@ use common::{
     network::acme::account::acme_create_account, psl,
 };
 use directory::core::secret::hash_secret;
-use jmap_proto::error::set::{SetError, SetErrorType};
+use jmap_proto::{
+    error::set::{SetError, SetErrorType},
+    request::MaybeInvalid,
+};
 use jmap_tools::{JsonPointer, JsonPointerItem, Key};
 use rand::{Rng, distr::Alphanumeric, rng};
 use registry::{
@@ -32,12 +35,14 @@ use registry::{
     },
     types::{ObjectImpl, list::List, map::Map},
 };
+use std::time::Duration;
 use store::{
     RegistryStore, SUBSPACE_PROPERTY, Store,
     registry::write::{RegistryWrite, RegistryWriteResult},
     write::{AnyKey, BatchBuilder},
 };
 use types::id::Id;
+use utils::{DomainPart, is_valid_domain};
 
 pub(crate) async fn bootstrap_get(
     mut get: RegistryGetResponse<'_>,
@@ -65,7 +70,7 @@ pub(crate) async fn bootstrap_get(
         }
     }
 
-    get.response.not_found.extend(ids);
+    get.response.not_found.extend(ids.map(MaybeInvalid::Value));
     Ok(get)
 }
 
@@ -119,8 +124,20 @@ pub(crate) async fn bootstrap_set(
         }
 
         // Validate domain name and hostname
-        let server_hostname = bootstrap.server_hostname.trim().to_lowercase();
-        let domain_name = bootstrap.default_domain.trim().to_lowercase();
+        let server_hostname = bootstrap
+            .server_hostname
+            .trim()
+            .to_lowercase()
+            .to_ascii_domain()
+            .map(|hostname| hostname.into_owned())
+            .unwrap_or_default();
+        let domain_name = bootstrap
+            .default_domain
+            .trim()
+            .to_lowercase()
+            .to_ascii_domain()
+            .map(|domain| domain.into_owned())
+            .unwrap_or_default();
         if !is_valid_domain(&server_hostname) {
             set.response.not_updated.append(
                 id,
@@ -166,15 +183,13 @@ pub(crate) async fn bootstrap_set(
         }
 
         // Make sure this is blank deployment
-        match store
-            .get_value::<u32>(AnyKey {
-                subspace: SUBSPACE_PROPERTY,
-                key: vec![0u8],
-            })
-            .await
-        {
-            Ok(None) => {}
-            Ok(Some(DATABASE_SCHEMA_VERSION)) => {
+        let probe = store.get_value::<u32>(AnyKey {
+            subspace: SUBSPACE_PROPERTY,
+            key: vec![0u8],
+        });
+        match tokio::time::timeout(Duration::from_secs(30), probe).await {
+            Ok(Ok(None)) => {}
+            Ok(Ok(Some(DATABASE_SCHEMA_VERSION))) => {
                 set.response.not_updated.append(
                     id,
                     SetError::invalid_properties()
@@ -183,7 +198,7 @@ pub(crate) async fn bootstrap_set(
                 );
                 break;
             }
-            Ok(Some(_)) => {
+            Ok(Ok(Some(_))) => {
                 set.response.not_updated.append(
                     id,
                     SetError::invalid_properties()
@@ -196,7 +211,7 @@ pub(crate) async fn bootstrap_set(
                 );
                 break;
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 trc::error!(err.caused_by(trc::location!()));
                 set.response.not_updated.append(
                     id,
@@ -205,6 +220,21 @@ pub(crate) async fn bootstrap_set(
                         .with_description(
                             "Failed to initialize data store, check logs for details.",
                         ),
+                );
+                break;
+            }
+            Err(_elapsed) => {
+                set.response.not_updated.append(
+                    id,
+                    SetError::invalid_properties()
+                        .with_property(Property::DataStore)
+                        .with_description(concat!(
+                            "Timed out probing the data store after 30 seconds. ",
+                            "Check that the backend is reachable: for FoundationDB verify ",
+                            "the cluster file points at reachable coordinators, for SQL ",
+                            "verify the host and credentials, and for S3 verify the endpoint ",
+                            "and bucket. See the server logs for details."
+                        )),
                 );
                 break;
             }
@@ -505,15 +535,6 @@ pub(crate) async fn bootstrap_set(
     Ok(set)
 }
 
-fn is_valid_domain(hostname: &str) -> bool {
-    const RESERVED_TLDS: &[&str] = &["test", "localhost", "local", "internal"];
-    psl::domain_str(hostname).is_some()
-        || RESERVED_TLDS.contains(&hostname)
-        || hostname
-            .rsplit_once('.')
-            .is_some_and(|(_, tld)| RESERVED_TLDS.contains(&tld))
-}
-
 async fn write_object(registry: &RegistryStore, object: &Object) -> Result<Id, SetError<Property>> {
     match registry.write(RegistryWrite::insert(object)).await {
         Ok(RegistryWriteResult::Success(id)) => Ok(id),
@@ -537,12 +558,9 @@ fn map_directory(directory: &DirectoryBootstrap) -> Option<Directory> {
 
 fn map_dns_server(dns_server: &DnsServerBootstrap) -> Option<registry::schema::structs::DnsServer> {
     match dns_server {
-        DnsServerBootstrap::Manual => None,
+        DnsServerBootstrap::Manual | DnsServerBootstrap::Deprecated1 => None,
         DnsServerBootstrap::Tsig(dns_server_tsig) => {
             DnsServer::Tsig(dns_server_tsig.clone()).into()
-        }
-        DnsServerBootstrap::Sig0(dns_server_sig0) => {
-            DnsServer::Sig0(dns_server_sig0.clone()).into()
         }
         DnsServerBootstrap::Cloudflare(dns_server_cloudflare) => {
             DnsServer::Cloudflare(dns_server_cloudflare.clone()).into()
@@ -572,6 +590,64 @@ fn map_dns_server(dns_server: &DnsServerBootstrap) -> Option<registry::schema::s
         DnsServerBootstrap::GoogleCloudDns(dns_server_google_cloud_dns) => {
             DnsServer::GoogleCloudDns(dns_server_google_cloud_dns.clone()).into()
         }
+        DnsServerBootstrap::Alidns(inner) => DnsServer::Alidns(inner.clone()).into(),
+        DnsServerBootstrap::ArvanCloud(inner) => DnsServer::ArvanCloud(inner.clone()).into(),
+        DnsServerBootstrap::Autodns(inner) => DnsServer::Autodns(inner.clone()).into(),
+        DnsServerBootstrap::AzureDns(inner) => DnsServer::AzureDns(inner.clone()).into(),
+        DnsServerBootstrap::BaiduCloud(inner) => DnsServer::BaiduCloud(inner.clone()).into(),
+        DnsServerBootstrap::BluecatV2(inner) => DnsServer::BluecatV2(inner.clone()).into(),
+        DnsServerBootstrap::ClouDns(inner) => DnsServer::ClouDns(inner.clone()).into(),
+        DnsServerBootstrap::Constellix(inner) => DnsServer::Constellix(inner.clone()).into(),
+        DnsServerBootstrap::Cpanel(inner) => DnsServer::Cpanel(inner.clone()).into(),
+        DnsServerBootstrap::Ddnss(inner) => DnsServer::Ddnss(inner.clone()).into(),
+        DnsServerBootstrap::DnsMadeEasy(inner) => DnsServer::DnsMadeEasy(inner.clone()).into(),
+        DnsServerBootstrap::Domeneshop(inner) => DnsServer::Domeneshop(inner.clone()).into(),
+        DnsServerBootstrap::Dreamhost(inner) => DnsServer::Dreamhost(inner.clone()).into(),
+        DnsServerBootstrap::DuckDns(inner) => DnsServer::DuckDns(inner.clone()).into(),
+        DnsServerBootstrap::Dynu(inner) => DnsServer::Dynu(inner.clone()).into(),
+        DnsServerBootstrap::EasyDns(inner) => DnsServer::EasyDns(inner.clone()).into(),
+        DnsServerBootstrap::EdgeDns(inner) => DnsServer::EdgeDns(inner.clone()).into(),
+        DnsServerBootstrap::Exoscale(inner) => DnsServer::Exoscale(inner.clone()).into(),
+        DnsServerBootstrap::FreeMyIp(inner) => DnsServer::FreeMyIp(inner.clone()).into(),
+        DnsServerBootstrap::GandiV5(inner) => DnsServer::GandiV5(inner.clone()).into(),
+        DnsServerBootstrap::Gcore(inner) => DnsServer::Gcore(inner.clone()).into(),
+        DnsServerBootstrap::Glesys(inner) => DnsServer::Glesys(inner.clone()).into(),
+        DnsServerBootstrap::Godaddy(inner) => DnsServer::Godaddy(inner.clone()).into(),
+        DnsServerBootstrap::Hetzner(inner) => DnsServer::Hetzner(inner.clone()).into(),
+        DnsServerBootstrap::HostingDe(inner) => DnsServer::HostingDe(inner.clone()).into(),
+        DnsServerBootstrap::Hostinger(inner) => DnsServer::Hostinger(inner.clone()).into(),
+        DnsServerBootstrap::HuaweiCloud(inner) => DnsServer::HuaweiCloud(inner.clone()).into(),
+        DnsServerBootstrap::Hurricane(inner) => DnsServer::Hurricane(inner.clone()).into(),
+        DnsServerBootstrap::IbmCloud(inner) => DnsServer::IbmCloud(inner.clone()).into(),
+        DnsServerBootstrap::Infoblox(inner) => DnsServer::Infoblox(inner.clone()).into(),
+        DnsServerBootstrap::Infomaniak(inner) => DnsServer::Infomaniak(inner.clone()).into(),
+        DnsServerBootstrap::Inwx(inner) => DnsServer::Inwx(inner.clone()).into(),
+        DnsServerBootstrap::Ionos(inner) => DnsServer::Ionos(inner.clone()).into(),
+        DnsServerBootstrap::Ipv64(inner) => DnsServer::Ipv64(inner.clone()).into(),
+        DnsServerBootstrap::Joker(inner) => DnsServer::Joker(inner.clone()).into(),
+        DnsServerBootstrap::Lightsail(inner) => DnsServer::Lightsail(inner.clone()).into(),
+        DnsServerBootstrap::Linode(inner) => DnsServer::Linode(inner.clone()).into(),
+        DnsServerBootstrap::LuaDns(inner) => DnsServer::LuaDns(inner.clone()).into(),
+        DnsServerBootstrap::MythicBeasts(inner) => DnsServer::MythicBeasts(inner.clone()).into(),
+        DnsServerBootstrap::Namecheap(inner) => DnsServer::Namecheap(inner.clone()).into(),
+        DnsServerBootstrap::NameDotCom(inner) => DnsServer::NameDotCom(inner.clone()).into(),
+        DnsServerBootstrap::NameSilo(inner) => DnsServer::NameSilo(inner.clone()).into(),
+        DnsServerBootstrap::Netcup(inner) => DnsServer::Netcup(inner.clone()).into(),
+        DnsServerBootstrap::Netlify(inner) => DnsServer::Netlify(inner.clone()).into(),
+        DnsServerBootstrap::Nifcloud(inner) => DnsServer::Nifcloud(inner.clone()).into(),
+        DnsServerBootstrap::Ns1(inner) => DnsServer::Ns1(inner.clone()).into(),
+        DnsServerBootstrap::OracleCloud(inner) => DnsServer::OracleCloud(inner.clone()).into(),
+        DnsServerBootstrap::Plesk(inner) => DnsServer::Plesk(inner.clone()).into(),
+        DnsServerBootstrap::Safedns(inner) => DnsServer::Safedns(inner.clone()).into(),
+        DnsServerBootstrap::Scaleway(inner) => DnsServer::Scaleway(inner.clone()).into(),
+        DnsServerBootstrap::TencentCloud(inner) => DnsServer::TencentCloud(inner.clone()).into(),
+        DnsServerBootstrap::Transip(inner) => DnsServer::Transip(inner.clone()).into(),
+        DnsServerBootstrap::UltraDns(inner) => DnsServer::UltraDns(inner.clone()).into(),
+        DnsServerBootstrap::Vercel(inner) => DnsServer::Vercel(inner.clone()).into(),
+        DnsServerBootstrap::Volcengine(inner) => DnsServer::Volcengine(inner.clone()).into(),
+        DnsServerBootstrap::Vultr(inner) => DnsServer::Vultr(inner.clone()).into(),
+        DnsServerBootstrap::WebSupport(inner) => DnsServer::WebSupport(inner.clone()).into(),
+        DnsServerBootstrap::YandexCloud(inner) => DnsServer::YandexCloud(inner.clone()).into(),
     }
 }
 

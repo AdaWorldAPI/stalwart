@@ -2,9 +2,282 @@
 
 All notable changes to this project will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.16.12] - 2026-06-XX
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+
+## Changed
+
+## Fixed
+- DANE: Treat DNSSEC `bogus` as a temporary failures to prevent downgrade attacks.
+- OIDC: `ECDSA` private key support for `SEC1` format.
+- PostgreSQL: Include error chain in error messages.
+- Prometheus: event counters are exported with incorrect metric names.
+- Registry: Changing the type of an existing account from `user` to `group` panics.
+
+## [0.16.11] - 2026-06-25
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- Encryption-at-rest: Support for `AES-256-GCM` and `ChaCha20-Poly1305` for S/MIME (#161).
+- S3: Support for `allowInvalidCerts` option to allow connecting to S3 endpoints with invalid TLS certificates.
+- Redis Sentinel support as an in-memory store and cluster coordinator backend (#2430).
+
+## Changed
+
+## Fixed
+- DANE: Verify DNSSEC is supported by the resolver before attempting to validate TLSA records.
+- TLS: Update search index when file-backed certificates are refreshed.
+- JMAP: `Principal/query` returns broad results when a `name` or `email` filter cannot be resolved.
+- Webhooks: event IDs collide for same event type emitted in the same second.
+
+## [0.16.10] - 2026-06-21
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- International Domain Names (IDN) support (#207).
+- OAuth:
+  - OAuth Profile for Open Public Clients ([draft-ietf-mailmaint-oauth-public](https://datatracker.ietf.org/doc/draft-ietf-mailmaint-oauth-public/))
+  - Client secret verification for confidential clients.
+- HTTP: Add `redirectRoot` option to `Http` object to allow redirecting requests to the root path to a different path (e.g. `/account`).
+- ACME: `reuseKey` option to allow reusing private keys in renewals.
+- IMAP: 
+  - IMAP Extension for Object Identifiers ([draft-ietf-mailmaint-imap-objectid-bis](https://datatracker.ietf.org/doc/draft-ietf-mailmaint-imap-objectid-bis/))
+  - `GETJMAPACCESS` command to discover the JMAP session resource URL (#2736).
+
+## Changed
+
+## Fixed
+- JMAP conformance (pass the [jmap-test-suite](https://github.com/jmapio/jmap-test-suite) tests):
+  - Methods are only available if their capability is in `using`.
+  - Reject requests that do not specify `application/json` in the `Content-Type` header.
+  - Require `accountId` argument on requests.
+  - Return unparsable ids in `notFound` / `notUpdated` / `notDestroyed` / `notCopied` instead of dropping them.
+  - Default calendars and address books are not subscribed by default.
+  - `*/set`: Unchanged immutable `id` property is rejected on update.
+  - `*/query` and `*/queryChanges`: null` rejected as `notRequest`.
+  - `Email/query`:
+    * Improper `anchor` handling.
+    * Total miscount when `collapseThreads` is enabled.
+    * Wrong sort order on `hasKeyword`, `allInThreadHaveKeyword`, and `someInThreadHaveKeyword` conditions.
+    * Non-standard header values are not searchable.
+  - `Email/copy`: Take the source message id from the value's `id` property.
+  - `Email/set`: Bump reference-resolution max_depth from 1 to 2.
+  - `Email/import`: Reject blobs that do not contain valid messages.
+  - `EmailSubmission/set`: return `sendAt` and `undoStatus` in the created response.
+  - `Mailbox/set`: Return `alreadyExists` instead of `invalidProperties` when creating a mailbox with an existing name.
+  - `SearchSnippet/get`: incorrect response structure.
+  - `Thread/changes`: emit a container delete when a thread becomes empty.
+  - `VacationResponse/set`: incorrect singleton handling.
+- IMAP: Discard oversized non-synchronizing literals (#2768).
+- DANE: Improper `TLSA` record validation (#2328 - credits to @vdukhovni).
+- OIDC: Add default domain name to groups that are not email addresses.
+- RocksDB: Enable blob garbage collection to reclaim disk space from deleted blobs.
+- Sieve: `include` statements ignore capitalisation of sub-script names (#1643)
+- Cache: Invalidate negative email caches when an account is created.
+- Troubleshoot tool: Use the configured source IP address when connecting to remote servers (#2867).
+
+## [0.16.9] - 2026-06-15
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- ACME: Allow specifying a preferred certificate chain.
+
+## Changed
+
+## Fixed
+- JMAP: `*/changes` methods leak ids of non-shared objects (reported by @5ud0er).
+- Sieve: Do not allow invalid certs in `http_header` function.
+- FoundationDB: Fix read version cache expiration logic.
+- MTA: Re-scheduling or editing a queued message reports success but persists nothing for recipients in a non-`default` virtual queue.
+- CardDAV: Version requests included in `address-data` are ignored.
+- ACME: Add freshness check when renewing certificates.
+- Autodiscover v2: Read email address from query parameters.
+- Sieve: Do not keep copies of redirected messages when `keep` is not specified.
+- Registry: Object ids are parsed as numbers.
+
+## [0.16.8] - 2026-06-06
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+
+## Changed
+- OAuth: Rework access tokens to an `AES-256-GCM-SIV` AEAD format that carries the account name for proxy routing.
+- Added more internal TLDs to the domain validation.
+
+## Fixed
+- MTA: 
+  - Sub-addressing with external directories returns `550 Mailbox not found`.
+  - Disabled aliases continue receiving messages.
+- JMAP for File Storage: `FileNode/get` returns a stale state string.
+- Make `SieveSystemInterpreter.defaultReturnPath` and `MtaQueueQuota.match` optional expressions.
+- Rate limiter panics when periods under 1 second are used.
+- CalDAV/CardDAV: Calendar events, contacts, calendars and address books deleted via JMAP do not write a vanished tombstone.
+- DNS updater: bump to `dns-update-v0.5.1`.
+
+## [0.16.7] - 2026-05-28
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- RateLimit header fields for HTTP ([draft-ietf-httpapi-ratelimit-headers-10](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-ratelimit-headers-10))
+- MTA: Implement `spamtest` in trusted Sieve scripts.
+
+## Changed
+
+## Fixed
+- Log rejected messages to tracing store.
+- MTA:
+  - Always update next DSN notify times.
+  - Expand lists and resolve catch-all addresses when building autogenerated messages.
+- Sharing: Includes resource that themselves carry a direct ACL grant and are leaves.
+- Tasks cannot be deleted in OSS builds.
+- Directory: Per-domain external directory resolution fails.
+- DNS updater: Keep external `TXT` records when updating RRSet.
+- HTTP: Reject requests from blocked IPs when `Keep-Alive` is enabled.
+
+## [0.16.6] - 2026-05-20
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- Added 58 new DNS provider integrations (see [dns-update](https://github.com/stalwartlabs/dns-update/blob/main/CHANGELOG.md#dns-update-040) crate for details).
+- DNS updater: Log DNS record types and values.
+- Sieve: Allow User Sieve scripts to access `orcpt`.
+- MTA: Log when messages are rejected or discarded by the spam classifier.
+
+## Changed
+- Bump JMAP File Storage to [draft-ietf-jmap-filenode-14](https://datatracker.ietf.org/doc/html/draft-ietf-jmap-filenode-14).
+- Accept password hashes with `$` or `{` prefixes as secure secrets.
+
+## Fixed
+- DAV: `acl-principal-prop-set` REPORT enforced the wrong privilege.
+- JMAP: `Thread/get` did not filter by per-mailbox ACLs on shared accounts.
+- IMAP: `UID FETCH N:*` could miss messages moved into a SELECTed mailbox by another connection.
+- DNS updater:
+  - Skip `v=spf1 a -all` records for apex domains.
+  - RFC2136 TSIG: regression related to multiplexer.
+  - Route53: Chunk `TXT` records when they exceed 255 characters.
+- ACME: 
+  - Update `defaultCertificateId` when renewing a certificate that is currently set as default.
+  - Perform `DNS-01` authorizations sequentially to avoid race conditions in some DNS providers.
+- Allow internal TLDs and special characters in e-mail addresses.
+- Websocket: Perform case insensitive matching during upgrade.
+- LDAP: Synchronize accounts when expanding mailing list recipients.
+- Sieve: `replace` action adds an extra `From` header.
+- ACL: Orphaned ACL entries for deleted accounts cause JMAP session errors.
+
+## [0.16.5] - 2026-05-11
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- `is_ip_in_cidr` expression function for CIDR matching.
+
+## Changed
+- Bump `mail-auth` to 0.9 (which bumps `hickory-resolver` to 0.26).
+- Deprecated RFC2136 SIG(0) support as it is no longer supported by `hickory`.
+
+## Fixed
+- JMAP: 
+  - Patching ids containing digits in JSON Pointers fails.
+  - Patching nested objects with `null` values fails.
+- External directories:
+  - SQL: Return `Failed` instead of `Error` when the query returns no results.
+  - LDAP: Impersonation fails when the user has not logged in before.
+- Network: Attempt binding to IPv4 when binding to IPv6 fails with `EAFNOSUPPORT` error.
+- Bootstrap: Timeout after 30 seconds when probing the data store.
+- HTTP: Use permissive CORS headers for `.well-known` endpoints.
+- ACME: 
+  - Include apex domains when requesting certificates for subdomains.
+  - Use the public suffix list to determine the zone name when no origin is provided.
+- MTA:
+  - Allow rescheduling recipients with permanent failures.
+  - Process reports using original `RCPT` before rewriting.
+- Autodiscover v2 endpoint unreachable.
+- DNS update (via `dns-update` crate):
+  - OVH + Google Cloud DNS: Fix FQDN handling for `MX` and `SRV` records.
+  - Route53: Fix changeset error resolution.
+  - deSEC: Use empty `subname` for apex records instead of `@`, which the API rejects.
+  - Cloudflare: Wrap `TXT` record content in double quotes (RFC 1035) to suppress dashboard warnings.
+- iCalendar/JSCalendar (via `calcard` crate):
+  - Support `STATUS:CANCELLED` mapping from `VTODO` to JSCalendar.
+  - Fixed duration parsing for zero duration `PT0S`.
+
+## [0.16.4] - 2026-05-05
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+
+## Changed
+
+## Fixed
+- Live tracing in community and OSS versions.
+- Timezone changes from the `AccountSettings` object return `invalidProperties`.
+- `mail-parser` panic with certain messages containing corrupted attachments.
+- Pagination by anchor for queued messages, tasks and metrics.
+- Spam filter: Use original instead of rewritten `RCPT` on checks.
+- JMAP:
+  - References in nested objects not resolved.
+  - `AddressBook/query` fetches wrong resources.
+- Import tool fails to restore registry entries.
+- FDB: Allow multiple FoundationDB instances in the same process.
+- Autoconfig: Return `%EMAILADDRESS%` when no email address is provided.
+- Quota: Include Sieve scripts in quota recalculations.
+
+## [0.16.3] - 2026-04-30
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+
+## Changed
+- Replaced `STALWART_HTTPS_PORT` with `STALWART_PUBLIC_URL`.
+- App Passwords now begin with `app_` instead of `app ` to avoid issues with some clients that do not support spaces in passwords.
+
+## Fixed
+- Directory: 
+  - Invalidate caches when group memberships change on an external directory.
+  - OIDC: errors instead of "failed to decode token".
+  - OIDC: Recovery admin access.
+  - User impersonation.
+- Tasks:
+  - Delete locked tasks.
+  - Queue pagination by anchor.
+- Log viewer: All events show as `INFO`.
+- Registry: Allow changing object variants.
+- Node id renewal.
+- DNS Updater: Fix Route53 serialization format.
+
+## [0.16.2] - 2026-04-28
+
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+
+## Added
+- OIDC: Fallback to `userinfo` endpoint when JWT token does not contain an email claim.
+- S3: `verifyAfterWrite` option to verify that objects have persisted after writing.
+
+## Changed
+- Allow HTTP to be used for configuring the server.
+
+## Fixed
+- LDAP: Generate valid `credentialId` when there are password changes.
+- TLS: Disable cipher suited option disables wrong ciphers.
+- DNS Updater:
+  - BunnyDNS: Use subdomain as name of record instead of FQDN.
+  - RFC2136: Chunk TXT records.
+- Skip invalid entries in log files.
+
 ## [0.16.1] - 2026-04-25
 
-This version includes **multiple breaking changes**. If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
+If you are upgrading from v0.16.x, replace the binary (or run `docker pull`). If you are upgrading from v0.15.x and below, please read the [upgrading documentation](https://github.com/stalwartlabs/stalwart/blob/main/UPGRADING/v0_16.md) for more information on how to upgrade from previous versions.
 
 ## Added
 - OIDC: Extract username from JWT token.
@@ -30,7 +303,6 @@ This version includes **multiple breaking changes**. If you are upgrading from v
   - Cloudflare: 
     - Fix `CAA` record updates.
     - Check zone subdomains when finding zones
-
 
 ## [0.16.0] - 2026-04-20
 

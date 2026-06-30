@@ -42,6 +42,14 @@ pub(crate) async fn redis_publish(
             .publish(topic, message)
             .await
             .map_err(into_error),
+        RedisPool::Sentinel(pool) => pool
+            .get()
+            .await
+            .map_err(into_error)?
+            .as_mut()
+            .publish(topic, message)
+            .await
+            .map_err(into_error),
     }
 }
 
@@ -78,6 +86,23 @@ pub(crate) async fn redis_subscribe(
             Ok(PubSubStream::RedisCluster(RedisClusterPubSubStream {
                 _conn,
                 rx,
+            }))
+        }
+        RedisPool::Sentinel(pool) => {
+            let client = pool
+                .manager()
+                .client
+                .lock()
+                .await
+                .async_get_client()
+                .await
+                .map_err(into_error)?;
+
+            let mut pubsub = client.get_async_pubsub().await.map_err(into_error)?;
+            pubsub.subscribe(topic).await.map_err(into_error)?;
+
+            Ok(PubSubStream::Redis(RedisPubSubStream {
+                stream: pubsub.into_on_message(),
             }))
         }
     }

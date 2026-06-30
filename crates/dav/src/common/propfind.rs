@@ -839,16 +839,19 @@ impl PropFindRequestHandler for Server {
                             ));
                         }
                         (
-                            CardDavProperty::AddressData(items),
+                            CardDavProperty::AddressData {
+                                properties,
+                                version,
+                            },
                             ArchivedResource::ContactCard(card),
                         ) => {
                             fields.push(DavPropertyValue::new(
                                 property.clone(),
                                 DavValue::CData(serialize_vcard_with_props(
                                     &card.inner.card,
-                                    items,
-                                    query
-                                        .max_vcard_version
+                                    properties,
+                                    (*version)
+                                        .or(query.max_vcard_version)
                                         .or_else(|| card.inner.card.version()),
                                 )),
                             ));

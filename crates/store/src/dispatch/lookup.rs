@@ -301,8 +301,9 @@ impl InMemoryStore {
         soft_check: bool,
     ) -> trc::Result<Option<u64>> {
         let now = now();
-        let range_start = now / rate.period.as_secs();
-        let range_end = (range_start * rate.period.as_secs()) + rate.period.as_secs();
+        let period = rate.period.as_secs().max(1);
+        let range_start = now / period;
+        let range_end = (range_start * period) + period;
         let expires_in = range_end - now;
 
         let mut bucket = Vec::with_capacity(key.len() + U64_LEN + 1);

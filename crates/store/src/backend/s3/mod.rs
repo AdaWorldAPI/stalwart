@@ -7,13 +7,14 @@
 use crate::BlobStore;
 use registry::schema::structs;
 use s3::{Bucket, Region, creds::Credentials};
-use std::{fmt::Display, io::Write, ops::Range, sync::Arc, time::Duration};
+use std::{io::Write, ops::Range, sync::Arc, time::Duration};
 use utils::codec::base32_custom::Base32Writer;
 
 pub struct S3Store {
     bucket: Box<Bucket>,
     prefix: Option<String>,
     max_retries: u32,
+    verify_after_write: bool,
 }
 
 impl S3Store {
@@ -80,15 +81,13 @@ impl S3Store {
             bucket: Bucket::new(&config.bucket, region, credentials)
                 .map_err(|err| format!("Failed to create bucket: {err:?}"))?
                 .with_path_style()
-                /*.set_dangereous_config(allow_invalid, allow_invalid)
-                .map_err(|err| {
-                    format!("Failed to create bucket: {err:?}")
-                })
-                ?*/
+                .set_dangerous_config(config.allow_invalid_certs, config.allow_invalid_certs)
+                .map_err(|err| format!("Failed to create bucket: {err:?}"))?
                 .with_request_timeout(config.timeout.into_inner())
                 .map_err(|err| format!("Failed to create bucket: {err:?}"))?,
             max_retries: config.max_retries as u32,
             prefix: config.key_prefix,
+            verify_after_write: config.verify_after_write,
         })))
     }
 
@@ -136,17 +135,53 @@ impl S3Store {
     }
 
     pub(crate) async fn put_blob(&self, key: &[u8], data: &[u8]) -> trc::Result<()> {
+        let path = self.build_key(key);
         let mut retries_left = self.max_retries;
 
         loop {
             let response = self
                 .bucket
-                .put_object(self.build_key(key), data)
+                .put_object(&path, data)
                 .await
                 .map_err(into_error)?;
 
             match response.status_code() {
-                200..=299 => return Ok(()),
+                200..=299 => {
+                    if !self.verify_after_write {
+                        return Ok(());
+                    }
+
+                    // Some S3-compatible backends acknowledge a PUT before the
+                    // write is durable. HEAD the object to confirm it is visible
+                    // to the read path before reporting success.
+                    let (_, head_status) =
+                        self.bucket.head_object(&path).await.map_err(into_error)?;
+
+                    match head_status {
+                        200..=299 => return Ok(()),
+                        404 | 500..=599 if retries_left > 0 => {
+                            tokio::time::sleep(Duration::from_secs(
+                                1 << (self.max_retries - retries_left).min(6),
+                            ))
+                            .await;
+
+                            retries_left -= 1;
+                        }
+                        404 => {
+                            return Err(trc::StoreEvent::S3Error
+                                .reason(concat!(
+                                    "PUT acknowledged with 2xx but object not visible",
+                                    "to read path; backend may be silently losing writes"
+                                ))
+                                .ctx(trc::Key::Code, head_status));
+                        }
+                        code => {
+                            return Err(trc::StoreEvent::S3Error
+                                .reason("HEAD verification failed after PUT")
+                                .ctx(trc::Key::Code, code));
+                        }
+                    }
+                }
                 500..=599 if retries_left > 0 => {
                     // wait backoff
                     tokio::time::sleep(Duration::from_secs(
@@ -209,7 +244,13 @@ impl S3Store {
     }
 }
 
-#[inline(always)]
-fn into_error(err: impl Display) -> trc::Error {
-    trc::StoreEvent::S3Error.reason(err)
+fn into_error(err: impl std::error::Error) -> trc::Error {
+    let mut reason = err.to_string();
+    let mut source = err.source();
+    while let Some(err) = source {
+        reason.push_str(": ");
+        reason.push_str(&err.to_string());
+        source = err.source();
+    }
+    trc::StoreEvent::S3Error.reason(reason)
 }

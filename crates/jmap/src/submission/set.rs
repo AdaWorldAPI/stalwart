@@ -21,13 +21,13 @@ use jmap_proto::{
     object::email_submission::{self, EmailSubmissionProperty, EmailSubmissionValue},
     references::resolve::ResolveCreatedReference,
     request::{
-        Call, IntoValid, MaybeInvalid, RequestMethod, SetRequestMethod,
+        Call, MaybeInvalid, RequestMethod, SetRequestMethod,
         method::{MethodFunction, MethodName, MethodObject},
         reference::{MaybeIdReference, MaybeResultReference},
     },
-    types::state::State,
+    types::{date::UTCDate, state::State},
 };
-use jmap_tools::{Key, Value};
+use jmap_tools::{Key, Map, Value};
 use smtp::{
     core::{Session, SessionData},
     queue::spool::SmtpSpool,
@@ -71,7 +71,7 @@ impl EmailSubmissionSet for Server {
     ) -> trc::Result<SetResponse<email_submission::EmailSubmission>> {
         let account_id = request.account_id.document_id();
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
 
         // Process creates
         let mut success_email_ids = HashMap::new();
@@ -88,6 +88,13 @@ impl EmailSubmissionSet for Server {
                         Id::from_parts(submission.thread_id, submission.email_id),
                     );
 
+                    let send_at = submission.send_at;
+                    let undo_status = match submission.undo_status {
+                        UndoStatus::Pending => email_submission::UndoStatus::Pending,
+                        UndoStatus::Final => email_submission::UndoStatus::Final,
+                        UndoStatus::Canceled => email_submission::UndoStatus::Canceled,
+                    };
+
                     // Insert record
                     let document_id = self
                         .store()
@@ -101,7 +108,27 @@ impl EmailSubmissionSet for Server {
                         .custom(ObjectIndexBuilder::<(), _>::new().with_changes(submission))
                         .caused_by(trc::location!())?
                         .commit_point();
-                    response.created(id, document_id);
+
+                    response.created.insert(
+                        id,
+                        Value::Object(
+                            Map::with_capacity(3)
+                                .with_key_value(
+                                    EmailSubmissionProperty::Id,
+                                    Value::Element(Id::from(document_id).into()),
+                                )
+                                .with_key_value(
+                                    EmailSubmissionProperty::SendAt,
+                                    Value::Element(EmailSubmissionValue::Date(
+                                        UTCDate::from_timestamp(send_at as i64),
+                                    )),
+                                )
+                                .with_key_value(
+                                    EmailSubmissionProperty::UndoStatus,
+                                    Value::Element(EmailSubmissionValue::UndoStatus(undo_status)),
+                                ),
+                        ),
+                    );
                 }
                 Err(err) => {
                     response.not_created.append(id, err);
@@ -110,7 +137,14 @@ impl EmailSubmissionSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -144,6 +178,19 @@ impl EmailSubmissionSet for Server {
                     response.not_updated.append(id, err);
                     continue 'update;
                 };
+
+                if matches!(&property, Key::Property(EmailSubmissionProperty::Id)) {
+                    if !crate::matches_id(&value, id) {
+                        response.not_updated.append(
+                            id,
+                            SetError::invalid_properties()
+                                .with_property(EmailSubmissionProperty::Id)
+                                .with_description("The id property is immutable."),
+                        );
+                        continue 'update;
+                    }
+                    continue;
+                }
 
                 if let (
                     Key::Property(EmailSubmissionProperty::UndoStatus),

@@ -70,7 +70,7 @@ impl<T: SessionStream> Session<T> {
         }
 
         // Build RCPT
-        let address_lcase = to.address.to_lowercase();
+        let address_lcase = to.address.to_lowercase_address(true);
         let rcpt = SessionAddress {
             domain: address_lcase.domain_part().into(),
             address_lcase,
@@ -140,7 +140,7 @@ impl<T: SessionStream> Session<T> {
             }
 
             // Milter filtering
-            if let Err(message) = self.run_milters(Stage::Rcpt, None).await {
+            if let Err(message) = self.run_milters(Stage::Rcpt, None, None).await {
                 self.data.rcpt_to.pop();
                 return self.write(message.message.as_bytes()).await;
             }
@@ -167,7 +167,7 @@ impl<T: SessionStream> Session<T> {
                 );
 
                 if new_address.contains('@') {
-                    rcpt.address_lcase = new_address.to_lowercase();
+                    rcpt.address_lcase = new_address.to_lowercase_address(true);
                     rcpt.domain = rcpt.address_lcase.domain_part().into();
                     rcpt.address = new_address;
                 }
@@ -359,6 +359,29 @@ impl<T: SessionStream> Session<T> {
                 if !self.data.rcpt_to.contains(&member_addr)
                     && member_addr.address_lcase != list_addr.address_lcase
                 {
+                    // Force external directory synchronization
+                    if let Ok(Some(member_domain)) = self.server.domain(&member_addr.domain).await
+                        && self
+                            .server
+                            .get_directory_for_cached_domain(&member_domain)
+                            .is_some_and(|directory| directory.can_lookup_recipients())
+                        && matches!(
+                            self.server
+                                .account_id_from_email(&member_addr.address_lcase, false)
+                                .await,
+                            Ok(None)
+                        )
+                        && let Err(err) = self
+                            .server
+                            .rcpt_resolve(&member_addr.address_lcase, self.data.session_id)
+                            .await
+                    {
+                        trc::error!(
+                            err.span_id(self.data.session_id)
+                                .caused_by(trc::location!())
+                        );
+                    }
+
                     member_addr.dsn_info = orcpt.clone().into();
                     member_addr.flags = list_addr.flags;
                     self.data.rcpt_to.push(member_addr);

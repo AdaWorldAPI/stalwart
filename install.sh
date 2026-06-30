@@ -207,8 +207,9 @@ write_env_file() {
 # Override the hostname used in HTTP responses
 #STALWART_HOSTNAME=mail.example.com
 
-# Override the HTTPS port used in HTTPS responses
-#STALWART_HTTPS_PORT=8080
+# Override the public base URL published in OAuth, OIDC, and JMAP discovery
+# documents. Accepts scheme, host, optional port, and optional path prefix.
+#STALWART_PUBLIC_URL=https://mail.example.com
 
 # Enable bootstrap / recovery mode on startup. Accepted: 1, true. Default: false.
 #STALWART_RECOVERY_MODE=true

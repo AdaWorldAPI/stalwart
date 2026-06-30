@@ -52,21 +52,21 @@ pub async fn test(imap: &mut ImapConnection, _imap_check: &mut ImapConnection, t
 
     let mut email_id = None;
     let mut thread_id = None;
-    imap.send("UID FETCH 1 (EMAILID THREADID)").await;
+    imap.send("UID FETCH 1 (OBJECTID)").await;
     for line in imap.assert_read(Type::Tagged, ResponseType::Ok).await {
-        if let Some((_, value)) = line.split_once("EMAILID (") {
+        if let Some((_, value)) = line.split_once("EMAILID ") {
             email_id = value
-                .split_once(')')
+                .split([' ', ')'])
+                .next()
                 .expect("Missing delimiter")
-                .0
                 .to_string()
                 .into();
         }
-        if let Some((_, value)) = line.split_once("THREADID (") {
+        if let Some((_, value)) = line.split_once("THREADID ") {
             thread_id = value
-                .split_once(')')
+                .split([' ', ')'])
+                .next()
                 .expect("Missing delimiter")
-                .0
                 .to_string()
                 .into();
         }

@@ -5,6 +5,7 @@
  */
 
 use super::metadata::MessageData;
+use crate::cache::{MessageCacheFetch, email::MessageCacheAccess};
 use common::{Server, storage::index::ObjectIndexBuilder};
 use groupware::calendar::storage::ItipAutoExpunge;
 use registry::schema::enums::IndexDocumentType;
@@ -18,7 +19,7 @@ use store::{
     write::{BatchBuilder, ValueClass},
 };
 use trc::AddContext;
-use types::collection::{Collection, VanishedCollection};
+use types::collection::{Collection, SyncCollection, VanishedCollection};
 use types::field::{EmailField, EmailSubmissionField};
 
 pub trait EmailDeletion: Sync + Send {
@@ -43,6 +44,14 @@ pub trait EmailDeletion: Sync + Send {
         account_id: u32,
         hold_period: u64,
     ) -> impl Future<Output = trc::Result<()>> + Send;
+
+    fn log_emptied_threads(
+        &self,
+        account_id: u32,
+        batch: &mut BatchBuilder,
+        thread_ids: RoaringBitmap,
+        deleted_ids: &RoaringBitmap,
+    ) -> impl Future<Output = trc::Result<()>> + Send;
 }
 
 impl EmailDeletion for Server {
@@ -54,6 +63,7 @@ impl EmailDeletion for Server {
         document_ids: RoaringBitmap,
     ) -> trc::Result<RoaringBitmap> {
         let mut deleted_ids = RoaringBitmap::new();
+        let mut thread_ids = RoaringBitmap::new();
         batch
             .with_account_id(account_id)
             .with_collection(Collection::Email);
@@ -72,6 +82,7 @@ impl EmailDeletion for Server {
                         (mailbox.mailbox_id.to_native(), mailbox.uid.to_native()),
                     );
                 }
+                thread_ids.insert(metadata.inner.thread_id.to_native());
                 batch
                     .with_document(document_id)
                     .custom(
@@ -95,6 +106,9 @@ impl EmailDeletion for Server {
         )
         .await?;
 
+        self.log_emptied_threads(account_id, batch, thread_ids, &deleted_ids)
+            .await?;
+
         let not_destroyed = if document_ids.len() == deleted_ids.len() {
             RoaringBitmap::new()
         } else {
@@ -103,6 +117,35 @@ impl EmailDeletion for Server {
         };
 
         Ok(not_destroyed)
+    }
+
+    async fn log_emptied_threads(
+        &self,
+        account_id: u32,
+        batch: &mut BatchBuilder,
+        thread_ids: RoaringBitmap,
+        deleted_ids: &RoaringBitmap,
+    ) -> trc::Result<()> {
+        if !thread_ids.is_empty() {
+            let cache = self
+                .get_cached_messages(account_id)
+                .await
+                .caused_by(trc::location!())?;
+            for thread_id in &thread_ids {
+                if cache
+                    .in_thread(thread_id)
+                    .all(|message| deleted_ids.contains(message.document_id))
+                {
+                    batch
+                        .with_account_id(account_id)
+                        .with_collection(Collection::Thread)
+                        .with_document(thread_id)
+                        .log_container_delete(SyncCollection::Thread);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn purge_account(&self, account_id: u32) -> trc::Result<()> {

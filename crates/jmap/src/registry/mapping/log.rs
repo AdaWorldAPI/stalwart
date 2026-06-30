@@ -181,6 +181,11 @@ fn read_log_offsets(
         for line in rev_lines {
             let line = line?;
             offset = offset.saturating_sub(line.len() as u64 + 1); // +1 for the newline character
+
+            if !is_log_header(&line) {
+                continue;
+            }
+
             let id = (file_number << 48) | offset;
 
             if !found_anchor {
@@ -267,6 +272,18 @@ fn read_log_entries(
     Ok(entries)
 }
 
+fn is_log_header(line: &str) -> bool {
+    let line = strip_ansi(line);
+    let bytes = line.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_digit() {
+        return false;
+    }
+    let Some((timestamp, _)) = line.split_once(' ') else {
+        return false;
+    };
+    DateTime::parse_from_rfc3339(timestamp).is_ok()
+}
+
 fn log_from_line(line: &str) -> Option<Log> {
     let line = strip_ansi(line);
     let (timestamp, rest) = line.split_once(' ')?;
@@ -277,7 +294,7 @@ fn log_from_line(line: &str) -> Option<Log> {
 
     Some(Log {
         timestamp: UTCDateTime::from_timestamp(timestamp.timestamp()),
-        level: TracingLevel::parse(&level.to_ascii_uppercase()).unwrap_or(TracingLevel::Info),
+        level: TracingLevel::parse(&level.to_ascii_lowercase()).unwrap_or(TracingLevel::Info),
         event: EventType::parse(event_id)?,
         details: details.trim().to_string(),
     })

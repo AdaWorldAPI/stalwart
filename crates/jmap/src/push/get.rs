@@ -35,7 +35,7 @@ impl PushSubscriptionFetch for Server {
         mut request: GetRequest<push_subscription::PushSubscription>,
         access_token: &AccessToken,
     ) -> trc::Result<GetResponse<push_subscription::PushSubscription>> {
-        let ids = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let properties = request.unwrap_properties(&[
             PushSubscriptionProperty::Id,
             PushSubscriptionProperty::DeviceClientId,
@@ -50,7 +50,7 @@ impl PushSubscriptionFetch for Server {
             account_id: request.account_id.into(),
             state: None,
             list: Vec::new(),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
 
         let Some(subscriptions_) = self
@@ -64,7 +64,7 @@ impl PushSubscriptionFetch for Server {
             .await?
         else {
             for id in ids.unwrap_or_default() {
-                response.not_found.push(id);
+                response.push_not_found(id);
             }
             return Ok(response);
         };
@@ -93,7 +93,7 @@ impl PushSubscriptionFetch for Server {
                 .iter()
                 .find(|p| p.id.to_native() == document_id)
             else {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             };
 

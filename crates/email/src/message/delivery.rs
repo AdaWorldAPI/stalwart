@@ -30,6 +30,7 @@ pub struct IngestMessage {
 #[derive(Debug)]
 pub struct IngestRecipient {
     pub address: String,
+    pub orcpt: Option<String>,
     pub is_spam: bool,
 }
 

@@ -439,7 +439,10 @@ END:VCALENDAR
                 vec![PropStat::new_list(vec![
                     DavPropertyValue::new(WebDavProperty::GetETag, "\"23ba4d-ff11fb\""),
                     DavPropertyValue::new(
-                        CardDavProperty::AddressData(Default::default()),
+                        CardDavProperty::AddressData {
+                            properties: Default::default(),
+                            version: None,
+                        },
                         DavValue::CData(
                             r#"BEGIN:VCARD
 VERSION:3.0

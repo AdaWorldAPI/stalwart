@@ -183,6 +183,25 @@ pub async fn test(test: &TestServer) {
             .is_none()
     );
 
+    // Email/changes must not leak ids of emails in folders John cannot read
+    let jane_inbox_email = email_ids.get("jane").unwrap().first().unwrap().clone();
+    let jane_trash_email = email_ids.get("jane").unwrap().last().unwrap().clone();
+    let changed_ids = john_client
+        .set_default_account_id(jane.id_string())
+        .email_changes("n", None)
+        .await
+        .unwrap()
+        .created()
+        .to_vec();
+    assert!(
+        changed_ids.contains(&jane_inbox_email),
+        "Email/changes should report the shared Inbox email"
+    );
+    assert!(
+        !changed_ids.contains(&jane_trash_email),
+        "Email/changes leaked the id of a non-shared Trash email"
+    );
+
     // John should only be able to copy blobs he has access to
     let blob_id = jane_client
         .email_get(

@@ -109,7 +109,7 @@ impl<T: SessionStream> Session<T> {
         }
 
         let (address, address_lcase, domain) = if !from.address.is_empty() {
-            let address_lcase = from.address.to_lowercase();
+            let address_lcase = from.address.to_lowercase_address(true);
             let domain = address_lcase.domain_part().into();
             (from.address.into_owned(), address_lcase, domain)
         } else {
@@ -187,7 +187,7 @@ impl<T: SessionStream> Session<T> {
         }
 
         // Milter filtering
-        if let Err(message) = self.run_milters(Stage::Mail, None).await {
+        if let Err(message) = self.run_milters(Stage::Mail, None, None).await {
             self.data.mail_from = None;
             return self.write(message.message.as_bytes()).await;
         }
@@ -218,7 +218,7 @@ impl<T: SessionStream> Session<T> {
             );
 
             if new_address.contains('@') {
-                mail_from.address_lcase = new_address.to_lowercase();
+                mail_from.address_lcase = new_address.to_lowercase_address(true);
                 mail_from.domain = mail_from.address_lcase.domain_part().into();
                 mail_from.address = new_address;
             } else if new_address.is_empty() {

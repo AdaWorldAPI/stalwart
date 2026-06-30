@@ -29,15 +29,16 @@ use crate::registry::{
 };
 use common::{
     Server, auth::AccessToken, cache::invalidate::CacheInvalidationBuilder,
-    expr::if_block::BootstrapExprExt,
+    expr::if_block::BootstrapExprExt, ipc::CacheInvalidation,
 };
+use directory::core::secret::{hash_secret, is_password_hash};
 use http_proto::HttpSessionData;
 use jmap_proto::{
     error::set::{SetError, SetErrorType},
     method::set::{SetRequest, SetResponse},
     object::registry::Registry,
     references::resolve::ResolveCreatedReference,
-    request::IntoValid,
+    request::{IntoValid, MaybeInvalid},
 };
 use jmap_tools::{JsonPointer, JsonPointerItem, Key};
 use registry::{
@@ -124,9 +125,11 @@ impl RegistrySet for Server {
         // Initial destroy validation for singletons
         let mut destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
         if is_singleton && !destroy.is_empty() {
-            response
-                .not_destroyed
-                .extend(destroy.drain(..).map(|id| (id, SetError::singleton())));
+            response.not_destroyed.extend(
+                destroy
+                    .drain(..)
+                    .map(|id| (MaybeInvalid::Value(id), SetError::singleton())),
+            );
         }
 
         // Update validation for willDestroy
@@ -343,11 +346,12 @@ impl RegistrySet for Server {
                     };
 
                     if is_create
-                        || (is_singleton
-                            && value
-                                .as_object()
-                                .unwrap()
-                                .contains_key(&Key::Property(Property::Type)))
+                        || value
+                            .as_object()
+                            .unwrap()
+                            .get(&Key::Property(Property::Type))
+                            .and_then(|v| v.as_str())
+                            .is_some_and(|t| new_object.object_variant().is_some_and(|v| v != t))
                     {
                         // Patch object
                         match new_object.patch(
@@ -383,6 +387,9 @@ impl RegistrySet for Server {
                     } else {
                         for (key, value) in value.into_expanded_object() {
                             let ptr = match key {
+                                Key::Property(Property::Type) => {
+                                    continue;
+                                }
                                 Key::Property(prop) => {
                                     JsonPointer::new(vec![JsonPointerItem::Key(Key::Property(
                                         prop,
@@ -459,8 +466,25 @@ impl RegistrySet for Server {
                         ObjectInner::MailingList(_) if is_create => {
                             validate_tenant_quota(&set, TenantStorageQuota::MaxMailingLists).await?
                         }
-                        ObjectInner::OAuthClient(_) if is_create => {
-                            validate_tenant_quota(&set, TenantStorageQuota::MaxOauthClients).await?
+                        ObjectInner::OAuthClient(client) => {
+                            if let Some(secret) = client.secret.as_mut()
+                                && !secret.is_empty()
+                                && !(matches!(secret.as_bytes().first(), Some(&b'$' | &b'{'))
+                                    && is_password_hash(secret))
+                            {
+                                *secret = hash_secret(
+                                    set.server.core.network.security.password_hash_algorithm,
+                                    std::mem::take(secret).into_bytes(),
+                                )
+                                .await
+                                .caused_by(trc::location!())?;
+                            }
+                            if is_create {
+                                validate_tenant_quota(&set, TenantStorageQuota::MaxOauthClients)
+                                    .await?
+                            } else {
+                                Ok(ObjectResponse::default())
+                            }
                         }
                         ObjectInner::Directory(_) if is_create => {
                             validate_tenant_quota(&set, TenantStorageQuota::MaxDirectories).await?
@@ -578,6 +602,7 @@ impl RegistrySet for Server {
                             Modification::Create { client_id, .. },
                             RegistryWriteResult::Success(id),
                         ) => {
+                            cache_invalidator.process_create(&new_object);
                             response.object.insert(Property::Id, RegistryValue::Id(id));
                             set.response
                                 .created
@@ -645,8 +670,17 @@ impl RegistrySet for Server {
                             .await?
                         {
                             RegistryWriteResult::Success(_) => {
-                                // Schedule account deletion
                                 if let ObjectInner::Account(account) = &object.inner {
+                                    for sharee_id in self
+                                        .store()
+                                        .acl_revoke_all(id.document_id())
+                                        .await
+                                        .caused_by(trc::location!())?
+                                    {
+                                        cache_invalidator
+                                            .invalidate(CacheInvalidation::AccessToken(sharee_id));
+                                    }
+
                                     schedule_account_destruction(set.server, id, account).await?;
                                 }
 
@@ -688,7 +722,9 @@ impl RegistrySet for Server {
             ObjectType::AccountSettings
             | ObjectType::ApiKey
             | ObjectType::AccountPassword
-            | ObjectType::AppPassword => account_set(set).await.map(|set| set.into_response()),
+            | ObjectType::AppPassword => Box::pin(account_set(set))
+                .await
+                .map(|set| set.into_response()),
 
             ObjectType::QueuedMessage => {
                 queued_message_set(set).await.map(|set| set.into_response())

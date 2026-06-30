@@ -7,12 +7,12 @@
 // Adapted from rustls-acme (https://github.com/FlorianUekermann/rustls-acme), licensed under MIT/Apache-2.0.
 
 use crate::network::acme::{AcmeError, AcmeResult};
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use aws_lc_rs::digest::{Digest, SHA256, digest};
 use aws_lc_rs::hmac;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 
 pub(crate) fn sign(

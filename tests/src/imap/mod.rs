@@ -15,6 +15,7 @@ pub mod fetch;
 pub mod idle;
 pub mod mailbox;
 pub mod managesieve;
+pub mod objectid;
 pub mod pop;
 pub mod search;
 pub mod store;
@@ -232,6 +233,13 @@ pub async fn imap_tests() {
         imap.authenticate(account.name(), account.secret()).await;
     }
 
+    // Test GETJMAPACCESS (RFC 9698)
+    imap.send("GETJMAPACCESS").await;
+    imap.assert_read(Type::Tagged, ResponseType::Ok)
+        .await
+        .assert_contains("* JMAPACCESS \"")
+        .assert_contains("/.well-known/jmap\"");
+
     // Delete folders
     for mailbox in ["Drafts", "Junk Mail", "Sent Items"] {
         imap.send(&format!("DELETE \"{}\"", mailbox)).await;
@@ -242,6 +250,7 @@ pub async fn imap_tests() {
     append::test(&mut imap, &mut imap_check, &test).await;
     search::test(&mut imap, &mut imap_check, &test).await;
     fetch::test(&mut imap, &mut imap_check).await;
+    objectid::test(&test).await;
     store::test(&mut imap, &mut imap_check, &test).await;
     copy_move::test(&mut imap, &mut imap_check).await;
     thread::test(&mut imap, &mut imap_check, &test).await;

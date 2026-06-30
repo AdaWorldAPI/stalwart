@@ -6,11 +6,13 @@
 
 use crate::task_manager::TaskResult;
 use common::Server;
+use dns_update::{DnsRecord, DnsRecordType, Error as DnsUpdateError};
 use registry::schema::structs::{
     DnsManagement, Domain, Task, TaskDnsManagement, TaskDomainManagement, TaskStatus,
 };
 use std::fmt::Write;
-use store::ahash::AHashSet;
+use store::ahash::AHashMap;
+use trc::DnsEvent;
 
 pub(crate) trait DnsManagementTask: Sync + Send {
     fn dns_management(&self, task: &TaskDnsManagement) -> impl Future<Output = TaskResult> + Send;
@@ -60,20 +62,51 @@ async fn dns_management(server: &Server, task: &TaskDnsManagement) -> trc::Resul
         .build_dns_records(task.domain_id, &domain, task.update_records.as_slice())
         .await?;
 
-    // Delete any previous records
-    let delete_records = records
-        .iter()
-        .map(|record| (&record.name, record.record.as_type()))
-        .collect::<AHashSet<_>>();
-    for (name, record_type) in delete_records {
-        let _ = dns_updater.delete(origin, name, record_type).await;
+    // Group records by (name, type) so each RRSet is published in one call.
+    let mut by_owner: AHashMap<(String, DnsRecordType), Vec<DnsRecord>> = AHashMap::new();
+    for record in records {
+        by_owner
+            .entry((record.name, record.record.as_type()))
+            .or_default()
+            .push(record.record);
     }
 
-    // Add new records
     let mut errors = String::new();
-    for record in records {
+    for ((name, record_type), mut recs) in by_owner {
+        if matches!(record_type, DnsRecordType::TXT) && !is_owned_txt_name(&name) {
+            match dns_updater.list_rrset(origin, &name, record_type).await {
+                Ok(existing) => {
+                    for existing_rec in existing {
+                        if !recs.iter().any(|new| same_txt_family(new, &existing_rec)) {
+                            recs.push(existing_rec);
+                        }
+                    }
+                }
+                Err(DnsUpdateError::Unsupported(reason)) => {
+                    trc::event!(
+                        Dns(DnsEvent::RecordLookupFailed),
+                        Hostname = name.clone(),
+                        Details = origin.to_string(),
+                        Type = record_type.as_str(),
+                        Reason = format!(
+                            "DNS provider cannot list RRSet, unrelated records at this name may be overwritten: {reason}"
+                        ),
+                    );
+                }
+                Err(err) => {
+                    trc::event!(
+                        Dns(DnsEvent::RecordLookupFailed),
+                        Hostname = name.clone(),
+                        Details = origin.to_string(),
+                        Type = record_type.as_str(),
+                        Reason = format!("DNS provider failed to list RRSet: {err}"),
+                    );
+                }
+            }
+        }
+
         if let Err(err) = dns_updater
-            .create(origin, &record.name, record.record, false, false)
+            .set_rrset(origin, &name, record_type, recs)
             .await
         {
             if !errors.is_empty() {
@@ -81,8 +114,10 @@ async fn dns_management(server: &Server, task: &TaskDnsManagement) -> trc::Resul
             }
             let _ = write!(
                 &mut errors,
-                "Failed to create DNS record for {}: {}",
-                record.name, err
+                "Failed to set DNS RRSet for {}/{}: {}",
+                name,
+                record_type.as_str(),
+                err
             );
         }
     }
@@ -101,4 +136,29 @@ async fn dns_management(server: &Server, task: &TaskDnsManagement) -> trc::Resul
     } else {
         Ok(TaskResult::permanent(errors))
     }
+}
+
+fn same_txt_family(a: &DnsRecord, b: &DnsRecord) -> bool {
+    match (a, b) {
+        (DnsRecord::TXT(va), DnsRecord::TXT(vb)) => match (txt_family(va), txt_family(vb)) {
+            (Some(fa), Some(fb)) => fa.eq_ignore_ascii_case(fb),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn txt_family(value: &str) -> Option<&str> {
+    let rest = value.trim_start().strip_prefix("v=")?;
+    let end = rest.find([';', ' ']).unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+fn is_owned_txt_name(name: &str) -> bool {
+    name.contains("_dmarc.")
+        || name.contains("_smtp._tls.")
+        || name.contains("_mta-sts.")
+        || name.contains("_ua-auto-config.")
+        || name.contains("_validation-persist.")
+        || name.contains("._domainkey.")
 }

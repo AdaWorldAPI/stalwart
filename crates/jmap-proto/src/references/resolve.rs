@@ -60,7 +60,7 @@ impl Response<'_> {
                 GetRequestMethod::Registry(request) => request.resolve_references(self)?,
             },
             RequestMethod::Set(request) => match request {
-                SetRequestMethod::Email(request) => request.resolve_references(self, 1, false)?,
+                SetRequestMethod::Email(request) => request.resolve_references(self, 2, false)?,
                 SetRequestMethod::Mailbox(request) => request.resolve_references(self, 1, false)?,
                 SetRequestMethod::Identity(request) => {
                     request.resolve_references(self, 1, false)?
@@ -107,6 +107,9 @@ impl Response<'_> {
                     request.resolve_references(self, 1, false)?
                 }
                 CopyRequestMethod::ContactCard(request) => {
+                    request.resolve_references(self, 1, false)?
+                }
+                CopyRequestMethod::FileNode(request) => {
                     request.resolve_references(self, 1, false)?
                 }
                 CopyRequestMethod::Blob(_) => (),

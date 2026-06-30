@@ -23,7 +23,7 @@ use imap_proto::{
     Command, ResponseCode, ResponseType, StatusResponse,
     parser::PushUnique,
     protocol::{
-        Flag,
+        Flag, ObjectId,
         expunge::Vanished,
         fetch::{
             self, Arguments, Attribute, BodyContents, BodyPart, BodyPartExtension, BodyPartFields,
@@ -61,6 +61,7 @@ impl<T: SessionStream> Session<T> {
         let is_qresync = self.is_qresync;
 
         let mut ops = Vec::with_capacity(requests.len());
+        let mut activate_objectid = false;
 
         for request in requests {
             let is_uid = matches!(request.command, Command::Fetch(true));
@@ -76,12 +77,20 @@ impl<T: SessionStream> Session<T> {
                         false
                     };
 
+                    if arguments.attributes.contains(&Attribute::ObjectId) {
+                        activate_objectid = true;
+                    }
+
                     ops.push(Ok((is_uid, enabled_condstore, arguments)));
                 }
                 Err(err) => {
                     ops.push(Err(err));
                 }
             }
+        }
+
+        if activate_objectid && let Some(enabled) = self.activate_objectid() {
+            self.write_bytes(enabled).await?;
         }
 
         spawn_op!(data, {
@@ -518,15 +527,12 @@ impl<T: SessionStream> SessionData<T> {
                             modseq: data.change_id + 1,
                         });
                     }
-                    Attribute::EmailId => {
-                        items.push(DataItem::EmailId {
-                            email_id: Id::from_parts(account_id, id).to_string(),
-                        });
-                    }
-                    Attribute::ThreadId => {
-                        items.push(DataItem::ThreadId {
-                            thread_id: Id::from_parts(account_id, data.thread_id).to_string(),
-                        });
+                    Attribute::ObjectId => {
+                        items.push(DataItem::ObjectId(ObjectId {
+                            email_id: Some(Id::from_parts(data.thread_id, id)),
+                            thread_id: Some(Id::from(data.thread_id)),
+                            ..Default::default()
+                        }));
                     }
                 }
             }

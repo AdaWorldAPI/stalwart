@@ -62,6 +62,7 @@ pub struct Http {
     pub allowed_endpoint: IfBlock,
     pub response_headers: Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>,
     pub use_forwarded: bool,
+    pub redirect_root: Option<String>,
 }
 
 #[derive(Clone)]
@@ -434,8 +435,8 @@ impl Http {
 
         Http {
             url_https: if !bp.registry.is_recovery_mode() {
-                if let Some(port) = bp.registry.https_port() {
-                    format!("https://{server_name}:{port}")
+                if let Some(url) = bp.registry.public_url() {
+                    url.to_string()
                 } else {
                     format!("https://{server_name}")
                 }
@@ -448,6 +449,7 @@ impl Http {
             rate_anonymous: http.rate_limit_anonymous,
             response_headers: http_headers,
             use_forwarded: http.use_x_forwarded,
+            redirect_root: http.redirect_root,
         }
     }
 }

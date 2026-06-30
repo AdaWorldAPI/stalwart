@@ -9,8 +9,8 @@ Two modes:
 
   convert — read those two JSON files and emit:
               * config.json   — plain DataStore object (Stalwart's main config)
-              * export.json   — array of `update`/`create` ops for everything
-                               else, in load order.
+              * export.json   — NDJSON stream of `update`/`create` ops for
+                               everything else, one op per line, in load order.
 
 Usage:
     python migrate_v016.py dump --url https://mail.example.com \
@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -416,6 +417,128 @@ def split_email(addr: str) -> tuple[str, str] | None:
         return None
     return (local, domain)
 
+_LABEL_RE = re.compile(r"^[^\W_](?:(?:[^\W_]|-){0,61}[^\W_])?$")
+_RFC6761_RESERVED_TLDS = {"test", "local", "localhost", "invalid", "example"}
+
+def is_valid_domain_name(name: str) -> bool:
+
+    if not name or len(name) > 253:
+        return False
+    name = name.strip(".").lower()
+    if not name:
+        return False
+    labels = name.split(".")
+    if len(labels) < 2:
+        return False
+    for label in labels:
+        if not _LABEL_RE.match(label):
+            return False
+    return True
+
+def is_valid_local_part(local: str) -> bool:
+
+    return bool(local) and "@" not in local
+
+def parse_path_patch(arg: str) -> tuple[str, str]:
+
+    if "=" not in arg:
+        raise argparse.ArgumentTypeError(
+            f"--patch-paths expects SOURCE=DEST, got {arg!r}"
+        )
+    src, _, dst = arg.partition("=")
+    src = src.rstrip("/")
+    dst = dst.rstrip("/")
+    if not src or not dst:
+        raise argparse.ArgumentTypeError(
+            f"--patch-paths expects non-empty SOURCE and DEST, got {arg!r}"
+        )
+    return (src, dst)
+
+def apply_path_patches(value: Any, patches: list[tuple[str, str]]) -> tuple[Any, int]:
+
+    count = 0
+    if isinstance(value, str):
+        for src, dst in patches:
+            if value == src or value.startswith(src + "/"):
+                return (dst + value[len(src):], 1)
+        return (value, 0)
+    if isinstance(value, list):
+        new_list: list[Any] = []
+        for item in value:
+            patched, n = apply_path_patches(item, patches)
+            new_list.append(patched)
+            count += n
+        return (new_list, count)
+    if isinstance(value, dict):
+        new_dict: dict[Any, Any] = {}
+        for k, v in value.items():
+            patched, n = apply_path_patches(v, patches)
+            new_dict[k] = patched
+            count += n
+        return (new_dict, count)
+    return (value, 0)
+
+def detect_legacy_paths(settings: dict[str, str], prefix: str = "/opt/stalwart") -> int:
+
+    needle = prefix.rstrip("/") + "/"
+    exact = prefix.rstrip("/")
+    return sum(
+        1
+        for v in settings.values()
+        if isinstance(v, str) and (needle in v or v.endswith(exact))
+    )
+
+_CONSUMED_PREFIXES: tuple[str, ...] = (
+    "acme.",
+    "certificate.",
+    "enterprise.",
+    "lookup.default.",
+    "server.hostname",
+    "signature.",
+    "storage.",
+    "store.",
+    "version.",
+)
+
+def is_consumed_setting_key(key: str) -> bool:
+
+    for prefix in _CONSUMED_PREFIXES:
+        if prefix.endswith(".") and key.startswith(prefix):
+            return True
+        if not prefix.endswith(".") and (key == prefix or key.startswith(prefix + ".")):
+            return True
+    return False
+
+def compute_unmigrated_keys(settings: dict[str, str]) -> list[str]:
+
+    return sorted(k for k in settings if not is_consumed_setting_key(k))
+
+def write_unmigrated_summary(unmigrated: list[str], path: str) -> None:
+
+    counts: dict[str, int] = {}
+    for k in unmigrated:
+        parts = k.split(".", 2)
+        prefix = ".".join(parts[:2]) if len(parts) >= 2 else parts[0]
+        counts[prefix] = counts.get(prefix, 0) + 1
+
+    width = max((len(p) for p in counts), default=0)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(
+            "# Unmigrated v0.15 settings\n"
+            "\n"
+            "These v0.15 settings were not migrated by the script and must be\n"
+            "reviewed manually. The list below is grouped by the first two\n"
+            "segments of the setting key. Each prefix maps to one or more v0.16\n"
+            "objects; consult UPGRADING/v0_16.md and the v0.16 reference docs\n"
+            "to identify the equivalent on the new schema.\n"
+            "\n"
+            f"Total unmigrated keys: {len(unmigrated)} across "
+            f"{len(counts)} prefixes.\n"
+            "\n"
+        )
+        for prefix in sorted(counts):
+            f.write(f"  {prefix:<{width}}  {counts[prefix]:5d} keys\n")
+
 def group_settings_by_prefix(settings: dict[str, str], prefix: str) -> dict[str, dict[str, str]]:
 
     raise NotImplementedError
@@ -515,6 +638,57 @@ def secret_text(value: str | None) -> dict[str, Any]:
         return {"@type": "None"}
     return {"@type": "Text", "secret": value}
 
+_MACRO_RE = re.compile(r"%\{(cfg|env|file):([^}]*)\}%")
+
+def resolve_macros(
+    value: str | None,
+    settings: dict[str, str],
+    _seen: frozenset[str] = frozenset(),
+) -> tuple[str | None, list[str]]:
+    if value is None or "%{" not in value:
+        return value, []
+    errors: list[str] = []
+
+    def repl(m: "re.Match[str]") -> str:
+        kind = m.group(1)
+        arg = m.group(2).strip()
+        if kind == "cfg":
+            if arg in _seen:
+                errors.append(f"circular %{{cfg:{arg}}}% reference")
+                return ""
+            raw = settings.get(arg)
+            if raw is None:
+                errors.append(f"unknown setting referenced by %{{cfg:{arg}}}%")
+                return ""
+            nested, nested_errors = resolve_macros(
+                raw, settings, _seen | {arg}
+            )
+            errors.extend(nested_errors)
+            return nested or ""
+        if kind == "env":
+            env = os.environ.get(arg)
+            if env is None:
+                errors.append(
+                    f"environment variable {arg!r} (from %{{env:{arg}}}%) "
+                    f"is not set"
+                )
+                return ""
+            return env
+        try:
+            with open(arg, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except OSError as exc:
+            errors.append(f"cannot read file {arg!r} (from %{{file:...}}%): {exc}")
+            return ""
+
+    prev = value
+    for _ in range(8):
+        cur = _MACRO_RE.sub(repl, prev)
+        if cur == prev:
+            break
+        prev = cur
+    return prev, errors
+
 _REDIS_PROTOCOL_MAP = {
     "resp2": "resp2",
     "resp3": "resp3",
@@ -593,11 +767,14 @@ class Converter:
         certificates = self._build_certificates()
 
         self._check_duplicate_emails(accounts, mailing_lists)
+        self._validate_records(domains, accounts, mailing_lists, dkim_signatures)
 
         data_store = self._build_data_store()
         blob_store = self._build_blob_store()
         in_memory_store = self._build_in_memory_store()
         search_store = self._build_search_store()
+        metrics_store = self._build_metrics_store()
+        tracing_store = self._build_tracing_store()
         enterprise = self._build_enterprise()
         system_settings = self._build_system_settings()
 
@@ -614,6 +791,10 @@ class Converter:
             out["InMemoryStore"] = in_memory_store
         if search_store is not None:
             out["SearchStore"] = search_store
+        if metrics_store is not None:
+            out["MetricsStore"] = metrics_store
+        if tracing_store is not None:
+            out["TracingStore"] = tracing_store
         if tenants:
             out["Tenant"] = tenants
         if domains:
@@ -747,6 +928,7 @@ class Converter:
             if parts and parts[1]:
                 return parts[1]
 
+        fallback: str | None = None
         for addr in pv_list(p.get("emails")):
             if not isinstance(addr, str):
                 continue
@@ -754,9 +936,30 @@ class Converter:
             if parts is None:
                 continue
             local, dom = parts
-            if local and local == nm and dom:
+            if not dom:
+                continue
+            if local and local == nm:
                 return dom
-        return None
+            if fallback is None:
+                fallback = dom
+        return fallback
+
+    def _tenant_default_domain_cid(self, p: dict[str, Any]) -> str | None:
+        tname = pv_string(p.get("tenant"))
+        if not tname:
+            return None
+        t_cid = self.tenant_name_to_cid.get(tname)
+        if t_cid is None:
+            return None
+        candidates = [
+            (self.domain_cid_to_name.get(cid, ""), cid)
+            for cid, owner in self.domain_cid_to_tenant_cid.items()
+            if owner == t_cid
+        ]
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[0][1]
 
     def _resolve_name_and_domain(self, p: dict[str, Any]) -> tuple[str, str]:
         nm = pv_string(p.get("name"))
@@ -775,6 +978,10 @@ class Converter:
             if dom not in self.domain_name_to_cid:
                 raise ConvertError(f"domain {dom!r} missing from domain index")
             return (nm, self.domain_name_to_cid[dom])
+
+        tenant_default = self._tenant_default_domain_cid(p)
+        if tenant_default is not None:
+            return (nm, tenant_default)
 
         if self.default_domain_cid is None:
             raise ConvertError(
@@ -1003,11 +1210,30 @@ class Converter:
             canon = sub.get("canonicalization", "relaxed/relaxed").strip().lower()
             if not canon:
                 canon = "relaxed/relaxed"
+            private_key, key_errors = resolve_macros(
+                sub.get("private-key"), self.settings
+            )
+            if private_key is not None:
+                private_key = private_key.strip()
+            if key_errors:
+                print(
+                    f"warning: skipping DKIM signature {sid!r}: could not "
+                    f"resolve private-key: {'; '.join(key_errors)}",
+                    file=sys.stderr,
+                )
+                continue
+            if not private_key or "%{" in private_key:
+                print(
+                    f"warning: skipping DKIM signature {sid!r}: private-key is "
+                    f"empty or still contains an unresolved macro",
+                    file=sys.stderr,
+                )
+                continue
             body: dict[str, Any] = {
                 "@type": tag,
                 "canonicalization": canon,
                 "domainId": "#" + dom_cid,
-                "privateKey": secret_text(sub.get("private-key")),
+                "privateKey": secret_text(private_key),
                 "selector": selector,
             }
             t_cid = self.domain_cid_to_tenant_cid.get(dom_cid)
@@ -1052,6 +1278,19 @@ class Converter:
             f"(DataStore requires rocksdb/sqlite/foundationdb/postgresql/mysql)"
         )
 
+    def _is_same_kv_store_as_data(self, sub: dict[str, str]) -> bool:
+        data_sid = self._referenced_store_id("storage.data")
+        if data_sid is None:
+            return False
+        data_sub = self._stores().get(data_sid)
+        if data_sub is None:
+            return False
+        if data_sub.get("type", "").strip().lower() != sub.get("type", "").strip().lower():
+            return False
+        data_path = data_sub.get("path", "").strip()
+        sub_path = sub.get("path", "").strip()
+        return bool(data_path) and data_path == sub_path
+
     def _build_blob_store(self) -> dict[str, Any] | None:
         sid = self._referenced_store_id("storage.blob")
         if sid is None:
@@ -1078,8 +1317,21 @@ class Converter:
             return self._build_postgresql(sub, for_blob=True)
         if stype == "mysql":
             return self._build_mysql(sub, for_blob=True)
-
-        return {"@type": "Default"}
+        if stype in ("rocksdb", "sqlite"):
+            if self._is_same_kv_store_as_data(sub):
+                return {"@type": "Default"}
+            raise ConvertError(
+                f"storage.blob points at store {sid!r} of type {stype!r}, "
+                f"but v0.16 does not support a separate {stype} blob store. "
+                "Consolidate blob data into the data store, or configure a "
+                "filesystem/s3/azure/foundationdb/postgresql/mysql blob "
+                "store and migrate the blobs before running this script."
+            )
+        raise ConvertError(
+            f"storage.blob points at store {sid!r} of unsupported type "
+            f"{stype!r} (BlobStore requires s3/azure/fs/foundationdb/"
+            "postgresql/mysql, or rocksdb/sqlite sharing the data store path)"
+        )
 
     def _build_in_memory_store(self) -> dict[str, Any] | None:
         sid = self._referenced_store_id("storage.lookup")
@@ -1126,7 +1378,74 @@ class Converter:
             return self._build_postgresql(sub, for_search=True)
         if stype == "mysql":
             return self._build_mysql(sub, for_search=True)
-        return {"@type": "Default"}
+        if stype in ("rocksdb", "sqlite"):
+            if self._is_same_kv_store_as_data(sub):
+                return {"@type": "Default"}
+            raise ConvertError(
+                f"storage.fts points at store {sid!r} of type {stype!r}, "
+                f"but v0.16 does not support a separate {stype} search "
+                "store. Consolidate the full-text index into the data store, "
+                "or configure an elasticsearch/meilisearch/foundationdb/"
+                "postgresql/mysql search store before running this script."
+            )
+        raise ConvertError(
+            f"storage.fts points at store {sid!r} of unsupported type "
+            f"{stype!r} (SearchStore requires elasticsearch/meilisearch/"
+            "foundationdb/postgresql/mysql, or rocksdb/sqlite sharing the "
+            "data store path)"
+        )
+
+    def _build_history_store(
+        self, store_key: str, enable_key: str, role: str
+    ) -> dict[str, Any] | None:
+        enable = parse_bool(self.settings.get(enable_key))
+        sid = self._referenced_store_id(store_key)
+        if enable is False:
+            return {"@type": "Disabled"}
+        if sid is None:
+            if enable is True:
+                return {"@type": "Default"}
+            return None
+        data_sid = self._referenced_store_id("storage.data")
+        if sid == data_sid:
+            return {"@type": "Default"}
+        stores = self._stores()
+        if sid not in stores:
+            raise ConvertError(
+                f"{store_key} = {sid!r} but no store.{sid}.type is defined"
+            )
+        sub = stores[sid]
+        stype = sub.get("type", "").strip().lower()
+        if stype == "foundationdb":
+            return self._build_foundationdb(sub)
+        if stype == "postgresql":
+            return self._build_postgresql(sub)
+        if stype == "mysql":
+            return self._build_mysql(sub)
+        if stype in ("rocksdb", "sqlite"):
+            if self._is_same_kv_store_as_data(sub):
+                return {"@type": "Default"}
+            raise ConvertError(
+                f"{store_key} points at store {sid!r} of type {stype!r}, "
+                f"but v0.16 does not support a separate {stype} {role} "
+                "store. Point this setting at the data store, or configure "
+                "a foundationdb/postgresql/mysql store."
+            )
+        raise ConvertError(
+            f"{store_key} points at store {sid!r} of unsupported type "
+            f"{stype!r} ({role} store requires foundationdb/postgresql/"
+            "mysql, or rocksdb/sqlite sharing the data store path)"
+        )
+
+    def _build_metrics_store(self) -> dict[str, Any] | None:
+        return self._build_history_store(
+            "metrics.history.store", "metrics.history.enable", "metrics"
+        )
+
+    def _build_tracing_store(self) -> dict[str, Any] | None:
+        return self._build_history_store(
+            "tracing.history.store", "tracing.history.enable", "tracing"
+        )
 
     def _build_rocksdb(self, sub: dict[str, str]) -> dict[str, Any]:
         path = sub.get("path", "").strip()
@@ -1439,8 +1758,21 @@ class Converter:
         for sid, sub in sorted(
             build_sub_trees(self.settings, "certificate", "cert").items()
         ):
-            cert = sub.get("cert", "").strip()
-            key = sub.get("private-key", "").strip()
+            cert, cert_errors = resolve_macros(
+                sub.get("cert", ""), self.settings
+            )
+            key, key_errors = resolve_macros(
+                sub.get("private-key", ""), self.settings
+            )
+            cert = (cert or "").strip()
+            key = (key or "").strip()
+            if cert_errors or key_errors:
+                print(
+                    f"warning: skipping certificate.{sid}: could not resolve "
+                    f"value: {'; '.join(cert_errors + key_errors)}",
+                    file=sys.stderr,
+                )
+                continue
             if not cert or not key:
                 print(
                     f"warning: skipping certificate.{sid}: "
@@ -1523,12 +1855,128 @@ class Converter:
                 claim(alias["name"], alias["domainId"],
                       f"alias of MailingList {cid} ({obj['name']})")
 
+    def _validate_records(
+        self,
+        domains: dict[str, dict[str, Any]],
+        accounts: dict[str, dict[str, Any]],
+        mailing_lists: dict[str, dict[str, Any]],
+        dkim_signatures: dict[str, dict[str, Any]],
+    ) -> None:
+        bad_domain_cids: set[str] = set()
+        rejected_domains = 0
+        for cid in list(domains.keys()):
+            name = domains[cid].get("name", "")
+            if not is_valid_domain_name(name):
+                print(
+                    f"warning: dropping domain {name!r}: not a valid v0.16 hostname "
+                    f"(must have at least two labels, valid characters)",
+                    file=sys.stderr,
+                )
+                bad_domain_cids.add(cid)
+                rejected_domains += 1
+                del domains[cid]
+
+        renamed_accounts = 0
+        dropped_accounts: list[str] = []
+        for cid in list(accounts.keys()):
+            obj = accounts[cid]
+            name = obj.get("name", "")
+            kind = obj.get("@type", "Account")
+            domain_ref = obj.get("domainId", "")
+            d_cid = domain_ref[1:] if domain_ref.startswith("#") else domain_ref
+            if d_cid in bad_domain_cids:
+                print(
+                    f"warning: dropping {kind} {name!r}: its domain was rejected",
+                    file=sys.stderr,
+                )
+                dropped_accounts.append(cid)
+                del accounts[cid]
+                continue
+            if "@" in name:
+                trimmed = name.replace("@", "").strip()
+                if trimmed and is_valid_local_part(trimmed):
+                    print(
+                        f"warning: renaming {kind} {name!r} to {trimmed!r} "
+                        f"(local-part must not contain '@')",
+                        file=sys.stderr,
+                    )
+                    obj["name"] = trimmed
+                    renamed_accounts += 1
+                else:
+                    print(
+                        f"warning: dropping {kind} {name!r}: invalid local-part, "
+                        f"rename in v0.15 before retrying",
+                        file=sys.stderr,
+                    )
+                    dropped_accounts.append(cid)
+                    del accounts[cid]
+                    continue
+            new_aliases: dict[str, dict[str, Any]] = {}
+            for idx, alias in obj.get("aliases", {}).items():
+                a_dom = alias.get("domainId", "")
+                a_dcid = a_dom[1:] if a_dom.startswith("#") else a_dom
+                if a_dcid in bad_domain_cids:
+                    print(
+                        f"warning: dropping alias of {kind} {name!r}: domain rejected",
+                        file=sys.stderr,
+                    )
+                    continue
+                if "@" in alias.get("name", ""):
+                    print(
+                        f"warning: dropping alias {alias.get('name')!r} of "
+                        f"{kind} {name!r}: invalid local-part",
+                        file=sys.stderr,
+                    )
+                    continue
+                new_aliases[idx] = alias
+            obj["aliases"] = new_aliases
+
+        for cid in list(mailing_lists.keys()):
+            obj = mailing_lists[cid]
+            domain_ref = obj.get("domainId", "")
+            d_cid = domain_ref[1:] if domain_ref.startswith("#") else domain_ref
+            if d_cid in bad_domain_cids:
+                print(
+                    f"warning: dropping MailingList {obj.get('name')!r}: domain rejected",
+                    file=sys.stderr,
+                )
+                del mailing_lists[cid]
+
+        dropped_dkim = 0
+        for cid in list(dkim_signatures.keys()):
+            obj = dkim_signatures[cid]
+            domain_ref = obj.get("domainId", "")
+            d_cid = domain_ref[1:] if domain_ref.startswith("#") else domain_ref
+            if d_cid and d_cid in bad_domain_cids:
+                print(
+                    f"warning: dropping DkimSignature for rejected domain",
+                    file=sys.stderr,
+                )
+                del dkim_signatures[cid]
+                dropped_dkim += 1
+
+        if rejected_domains or renamed_accounts or dropped_accounts or dropped_dkim:
+            print(
+                f"validation summary: {rejected_domains} domain(s) rejected, "
+                f"{renamed_accounts} account(s) renamed, "
+                f"{len(dropped_accounts)} account(s) dropped, "
+                f"{dropped_dkim} DKIM signature(s) dropped",
+                file=sys.stderr,
+            )
+            print(
+                "review the warnings above; fix them in the source v0.15 deployment "
+                "and rerun if any of the rejections are unintentional.",
+                file=sys.stderr,
+            )
+
 SINGLETON_ORDER = [
     "SystemSettings",
     "Enterprise",
     "BlobStore",
     "InMemoryStore",
     "SearchStore",
+    "MetricsStore",
+    "TracingStore",
 ]
 
 COLLECTION_ORDER = [
@@ -1588,15 +2036,41 @@ def cmd_convert(args: argparse.Namespace) -> int:
         raise ConvertError(
             "DataStore could not be built (storage.data missing or invalid)"
         )
+
+    patches: list[tuple[str, str]] = list(args.patch_paths or [])
+    if not patches and not args.keep_paths:
+        legacy = detect_legacy_paths(settings, "/opt/stalwart")
+        if legacy:
+            print(
+                f"notice: detected legacy Docker paths under /opt/stalwart in "
+                f"{legacy} settings.\n"
+                f"        the v0.16 Docker image mounts persistent data at "
+                f"/var/lib/stalwart.\n"
+                f"        rerun with --patch-paths /opt/stalwart=/var/lib/stalwart "
+                f"to rewrite,\n"
+                f"        or pass --keep-paths to suppress this notice "
+                f"(e.g. for binary deployments).",
+                file=sys.stderr,
+            )
+
+    if patches:
+        data_store, n_cfg = apply_path_patches(data_store, patches)
+        print(f"  patched {n_cfg} path(s) in {args.config}", file=sys.stderr)
+
     with open(args.config, "w", encoding="utf-8") as f:
         json.dump(data_store, f, indent=2, ensure_ascii=False)
     print(f"wrote {args.config} (DataStore: @type={data_store.get('@type')!r})",
           file=sys.stderr)
 
     ops = build_export_ops(result)
+    if patches:
+        ops, n_ops = apply_path_patches(ops, patches)
+        print(f"  patched {n_ops} path(s) in {args.output}", file=sys.stderr)
     with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(ops, f, indent=2, ensure_ascii=False)
-    print(f"wrote {args.output} ({len(ops)} ops)", file=sys.stderr)
+        for op in ops:
+            f.write(json.dumps(op, ensure_ascii=False))
+            f.write("\n")
+    print(f"wrote {args.output} ({len(ops)} ops, NDJSON)", file=sys.stderr)
     for op in ops:
         kind = op["@type"]
         name = op["object"]
@@ -1605,6 +2079,16 @@ def cmd_convert(args: argparse.Namespace) -> int:
         else:
             print(f"  create {name}: {len(op['value'])} records",
                   file=sys.stderr)
+
+    if args.unmigrated_output:
+        unmigrated = compute_unmigrated_keys(settings)
+        if unmigrated:
+            write_unmigrated_summary(unmigrated, args.unmigrated_output)
+            print(
+                f"wrote {args.unmigrated_output} ({len(unmigrated)} v0.15 "
+                f"settings keys not migrated; review and recreate manually)",
+                file=sys.stderr,
+            )
     return 0
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1635,8 +2119,23 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Output file for the DataStore object "
                         "(default: config.json).")
     c.add_argument("--output", default="export.json",
-                   help="Output file for the operations array "
+                   help="Output NDJSON file with one operation per line "
                         "(default: export.json).")
+    c.add_argument("--patch-paths", action="append", type=parse_path_patch,
+                   metavar="SOURCE=DEST",
+                   help="Rewrite paths beginning with SOURCE to DEST in both "
+                        "config.json and export.json. May be passed multiple "
+                        "times. Use to migrate Docker deployments from "
+                        "/opt/stalwart to /var/lib/stalwart.")
+    c.add_argument("--keep-paths", action="store_true",
+                   help="Suppress the legacy-path detection notice. Use when "
+                        "the on-disk paths in the v0.15 deployment are also "
+                        "valid for the v0.16 deployment (typical for binary "
+                        "installs).")
+    c.add_argument("--unmigrated-output", default="unmigrated.txt",
+                   help="Output file listing v0.15 setting prefixes that the "
+                        "script did not migrate (default: unmigrated.txt). "
+                        "Pass an empty string to skip writing this file.")
     c.set_defaults(func=cmd_convert)
 
     return p

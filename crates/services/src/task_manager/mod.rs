@@ -10,8 +10,8 @@ use registry::schema::structs::Task;
 use registry::types::EnumImpl;
 use std::future::Future;
 use std::time::Instant;
+use store::ahash::AHashMap;
 use store::write::Operation;
-use store::{ahash::AHashMap, write::now};
 use tokio::sync::mpsc;
 use trc::TaskManagerEvent;
 

@@ -410,7 +410,7 @@ pub fn instant_to_timestamp(now: Instant, time: Instant) -> u64 {
 impl Recipient {
     pub fn new(address: impl AsRef<str>) -> Self {
         Recipient {
-            address: address.to_lowercase_domain().into_boxed_str(),
+            address: address.to_lowercase_address(false).into_boxed_str(),
             status: Status::Scheduled,
             flags: 0,
             orcpt: None,

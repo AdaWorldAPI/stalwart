@@ -161,6 +161,21 @@ impl DavResources {
         }
     }
 
+    pub fn format_resource_paths_by_id(
+        &self,
+        document_id: u32,
+    ) -> impl Iterator<Item = String> + '_ {
+        self.paths
+            .iter()
+            .filter(move |path| self.resources[path.resource_idx].document_id == document_id)
+            .map(move |path| {
+                self.format_resource(DavResourcePath {
+                    path,
+                    resource: &self.resources[path.resource_idx],
+                })
+            })
+    }
+
     pub fn format_collection(&self, name: &str) -> String {
         format!("{}{name}/", self.base_path)
     }

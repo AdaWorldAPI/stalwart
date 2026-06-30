@@ -8,7 +8,7 @@ use super::AccessToken;
 use crate::{
     Server,
     auth::{
-        AccessScope, AccessTo, AccessTokenInner, AccountTenantIds, RECOVERY_ADMIN_ID, Permissions,
+        AccessScope, AccessTo, AccessTokenInner, AccountTenantIds, Permissions, RECOVERY_ADMIN_ID,
         permissions::{BuildPermissions, PermissionsListBuilder},
     },
     network::limiter::{ConcurrencyLimiter, LimiterResult},
@@ -31,6 +31,7 @@ use tinyvec::TinyVec;
 use trc::{AddContext, StoreEvent};
 use types::{acl::Acl, collection::Collection};
 use utils::map::bitmap::{Bitmap, BitmapItem};
+use xxhash_rust::xxh3;
 
 impl Server {
     async fn build_access_token(
@@ -124,6 +125,7 @@ impl Server {
                 }
 
                 let now = now();
+                let mut credential_version = 0;
                 let mut credential_scopes = Vec::with_capacity(account.credentials.len());
 
                 credential_scopes.push(AccessScope::new(permissions.finalize(), u32::MAX));
@@ -131,6 +133,8 @@ impl Server {
                 for credential in account.credentials {
                     match credential {
                         structs::Credential::Password(credential) => {
+                            credential_version = xxh3::xxh3_64(credential.secret.as_bytes()).max(1);
+
                             if credential.expires_at.is_some() || !credential.allowed_ips.is_empty()
                             {
                                 let credential_scope = &mut credential_scopes[0];
@@ -201,6 +205,7 @@ impl Server {
                     obj_size: 0,
                     revision,
                     revision_account,
+                    credential_version,
                     account_id,
                     tenant_id,
                     member_of,
@@ -243,6 +248,7 @@ impl Server {
                     obj_size: 0,
                     revision,
                     revision_account,
+                    credential_version: 0,
                     account_id,
                     tenant_id,
                     member_of: Default::default(),
@@ -552,6 +558,7 @@ impl AccessToken {
                     concurrent_uploads: old_inner.concurrent_uploads.clone(),
                     revision_account: old_inner.revision_account,
                     revision: old_inner.revision,
+                    credential_version: old_inner.credential_version,
                     obj_size: old_inner.obj_size,
                 };
 
@@ -695,6 +702,14 @@ impl AccessToken {
             .map_or(LimiterResult::Disabled, |limiter| limiter.is_allowed())
     }
 
+    pub fn concurrent_http_requests(&self) -> u64 {
+        self.inner
+            .concurrent_http_requests
+            .as_ref()
+            .map(|limiter| limiter.max_concurrent())
+            .unwrap_or(0)
+    }
+
     pub fn is_imap_request_allowed(&self) -> LimiterResult {
         self.inner
             .concurrent_imap_requests
@@ -707,6 +722,14 @@ impl AccessToken {
             .concurrent_uploads
             .as_ref()
             .map_or(LimiterResult::Disabled, |limiter| limiter.is_allowed())
+    }
+
+    pub fn concurrent_uploads(&self) -> u64 {
+        self.inner
+            .concurrent_uploads
+            .as_ref()
+            .map(|limiter| limiter.max_concurrent())
+            .unwrap_or(0)
     }
 
     pub fn account_tenant_ids(&self) -> AccountTenantIds {
@@ -744,6 +767,7 @@ impl AccessToken {
                 concurrent_uploads: Default::default(),
                 revision: Default::default(),
                 revision_account: Default::default(),
+                credential_version: Default::default(),
                 obj_size: Default::default(),
             }),
         }
@@ -788,6 +812,7 @@ impl AccessTokenInner {
             concurrent_uploads: Default::default(),
             revision: Default::default(),
             revision_account: Default::default(),
+            credential_version: Default::default(),
             obj_size: Default::default(),
         }
     }
@@ -798,6 +823,10 @@ impl AccessTokenInner {
 
     pub fn revision_account(&self) -> u64 {
         self.revision_account
+    }
+
+    pub fn credential_version(&self) -> u64 {
+        self.credential_version
     }
 }
 
@@ -839,6 +868,9 @@ fn hash_account(account: &Account) -> u64 {
                 credential.credential_id.hash(&mut s);
                 credential.expires_at.hash(&mut s);
                 hash_credential_permissions(&mut s, &credential.permissions);
+            }
+            for group_id in account.member_group_ids.iter() {
+                group_id.hash(&mut s);
             }
         }
         Account::Group(account) => {

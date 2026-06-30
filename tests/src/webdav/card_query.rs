@@ -15,7 +15,10 @@ pub async fn test(test: &TestServer) {
     let client = test.account("john@example.com").webdav_client();
 
     // Create test data
-    let default_path = format!("{}/john%40example.com/default/", DavResourceName::Card.base_path());
+    let default_path = format!(
+        "{}/john%40example.com/default/",
+        DavResourceName::Card.base_path()
+    );
     let mut hrefs = Vec::with_capacity(3);
     for (i, vcard) in [VCARD1, VCARD2, VCARD3].iter().enumerate() {
         let href = format!("{default_path}contact-{i}.vcf",);
@@ -41,9 +44,10 @@ pub async fn test(test: &TestServer) {
         .get(DavProperty::WebDav(WebDavProperty::GetETag))
         .is_not_empty();
     props
-        .get(DavProperty::CardDav(CardDavProperty::AddressData(
-            Default::default(),
-        )))
+        .get(DavProperty::CardDav(CardDavProperty::AddressData {
+            properties: Default::default(),
+            version: None,
+        }))
         .with_values([r#"BEGIN:VCARD
 VERSION:4.0
 FN:Carlos Rodriguez-Martinez
@@ -68,9 +72,10 @@ END:VCARD
         .get(DavProperty::WebDav(WebDavProperty::GetETag))
         .is_not_empty();
     props
-        .get(DavProperty::CardDav(CardDavProperty::AddressData(
-            Default::default(),
-        )))
+        .get(DavProperty::CardDav(CardDavProperty::AddressData {
+            properties: Default::default(),
+            version: None,
+        }))
         .with_values([r#"BEGIN:VCARD
 FN:Carlos Rodriguez-Martinez
 BDAY:--0623
@@ -87,9 +92,10 @@ END:VCARD
         .get(DavProperty::WebDav(WebDavProperty::GetETag))
         .is_not_empty();
     props
-        .get(DavProperty::CardDav(CardDavProperty::AddressData(
-            Default::default(),
-        )))
+        .get(DavProperty::CardDav(CardDavProperty::AddressData {
+            properties: Default::default(),
+            version: None,
+        }))
         .with_values([r#"BEGIN:VCARD
 FN:Sarah Johnson
 BDAY:19850415
@@ -110,9 +116,10 @@ END:VCARD
         .into_propfind_response(None);
     let props = response.properties(uri_acme);
     props
-        .get(DavProperty::CardDav(CardDavProperty::AddressData(
-            Default::default(),
-        )))
+        .get(DavProperty::CardDav(CardDavProperty::AddressData {
+            properties: Default::default(),
+            version: None,
+        }))
         .with_values([VCARD3.replace('\n', "\r\n").as_str()]);
 
     // Test 4: Search using limit

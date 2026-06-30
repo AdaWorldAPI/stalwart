@@ -13,7 +13,7 @@ use common::{
     Server, USER_AGENT,
     config::smtp::{
         report::AggregateFrequency,
-        resolver::{Mode, MxPattern},
+        resolver::{Mode, MxPattern, TlsaMatching},
     },
     ipc::{TlsEvent, ToHash},
 };
@@ -363,7 +363,11 @@ impl TlsReporting for Server {
                                     "{} {} {} {}",
                                     if entry.is_end_entity { 3 } else { 2 },
                                     i32::from(entry.is_spki),
-                                    if entry.is_sha256 { 1 } else { 2 },
+                                    match entry.matching {
+                                        TlsaMatching::Full => 0,
+                                        TlsaMatching::Sha256 => 1,
+                                        TlsaMatching::Sha512 => 2,
+                                    },
                                     entry.data.iter().fold(
                                         String::with_capacity(64),
                                         |mut s, b| {

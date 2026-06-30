@@ -61,6 +61,7 @@ impl<T: SessionStream> Session<T> {
                             Action::Quarantine => MtaHookEvent::ActionQuarantine,
                         }),
                         SpanId = self.data.session_id,
+                        QueueId = queue_id,
                         Id = mta_hook.id.to_string(),
                         Elapsed = time.elapsed(),
                     );

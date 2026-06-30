@@ -13,7 +13,7 @@ use ahash::AHashSet;
 use registry::{
     schema::{
         prelude::{Object, ObjectInner, ObjectType},
-        structs::Account,
+        structs::{Account, EmailAlias},
     },
     types::id::ObjectId,
 };
@@ -57,6 +57,10 @@ impl CacheInvalidationBuilder {
                     self.invalidate(CacheInvalidation::Account(id));
                 }
 
+                if was_renamed || aliases_changed {
+                    self.invalidate_negative_email(&new_object.inner);
+                }
+
                 if tenant_changed
                     || groups_changed
                     || credentials_changed
@@ -92,6 +96,10 @@ impl CacheInvalidationBuilder {
                     || details_changed
                 {
                     self.invalidate(CacheInvalidation::Account(id));
+                }
+
+                if was_renamed || aliases_changed {
+                    self.invalidate_negative_email(&new_object.inner);
                 }
 
                 if tenant_changed || roles_changed || permissions_changed {
@@ -158,6 +166,12 @@ impl CacheInvalidationBuilder {
                     || (current.domain_id != new.domain_id) =>
             {
                 self.invalidate(CacheInvalidation::List(id));
+                if (current.aliases != new.aliases)
+                    || (current.name != new.name)
+                    || (current.domain_id != new.domain_id)
+                {
+                    self.invalidate_negative_email(&new_object.inner);
+                }
             }
             _ => {}
         }
@@ -191,6 +205,34 @@ impl CacheInvalidationBuilder {
                 self.invalidate(CacheInvalidation::List(id));
             }
             _ => {}
+        }
+    }
+
+    pub fn process_create(&mut self, object: &Object) {
+        self.invalidate_negative_email(&object.inner);
+    }
+
+    fn invalidate_negative_email(&mut self, object: &ObjectInner) {
+        let (name, domain_id, aliases) = match object {
+            ObjectInner::Account(Account::User(account)) => {
+                (&account.name, account.domain_id, &account.aliases)
+            }
+            ObjectInner::Account(Account::Group(account)) => {
+                (&account.name, account.domain_id, &account.aliases)
+            }
+            ObjectInner::MailingList(list) => (&list.name, list.domain_id, &list.aliases),
+            _ => return,
+        };
+
+        self.invalidate(CacheInvalidation::EmailNegative {
+            domain_id: domain_id.document_id(),
+            local_part_hash: hash_local_part(name),
+        });
+        for alias in aliases.iter().filter(|alias: &&EmailAlias| alias.enabled) {
+            self.invalidate(CacheInvalidation::EmailNegative {
+                domain_id: alias.domain_id.document_id(),
+                local_part_hash: hash_local_part(&alias.name),
+            });
         }
     }
 
@@ -298,15 +340,21 @@ impl Server {
         self.inner.cache.emails_negative.clear();
     }
 
-    pub fn invalidate_local_negative_account_cache(&self, local_part: &str, domain_id: u32) {
+    pub fn invalidate_local_negative_account_cache(
+        &self,
+        local_part: &str,
+        domain_id: u32,
+    ) -> bool {
         self.inner
             .cache
             .emails_negative
-            .remove(&EmailAddressRef::new(local_part, domain_id));
+            .remove(&EmailAddressRef::new(local_part, domain_id))
+            .is_some()
     }
 
     pub async fn invalidate_local_caches(&self, changes: &[CacheInvalidation]) {
         let cache = &self.inner.cache;
+        let mut negative_emails: AHashSet<(u32, u32)> = AHashSet::new();
 
         for change in changes {
             match change {
@@ -327,9 +375,14 @@ impl Server {
                 }
                 CacheInvalidation::Account(id) => {
                     cache.accounts.remove(id);
-                    cache.emails.inner().retain(
-                        |_, v| !matches!(v, EmailCache::Account(account_id) if account_id == id),
-                    );
+                    cache.emails.inner().retain(|_, v| {
+                        !matches!(
+                            v,
+                            EmailCache::Account(account_id)
+                                | EmailCache::DisabledAccountAddress(account_id)
+                            if account_id == id
+                        )
+                    });
                 }
                 CacheInvalidation::DkimSignature(id) => {
                     cache.dkim_signers.remove(id);
@@ -342,9 +395,14 @@ impl Server {
                 }
                 CacheInvalidation::List(id) => {
                     cache.lists.remove(id);
-                    cache.emails.inner().retain(
-                        |_, v| !matches!(v, EmailCache::MailingList(list_id) if list_id == id),
-                    );
+                    cache.emails.inner().retain(|_, v| {
+                        !matches!(
+                            v,
+                            EmailCache::MailingList(list_id)
+                                | EmailCache::DisabledListAddress(list_id)
+                            if list_id == id
+                        )
+                    });
                 }
                 CacheInvalidation::DomainLogo(id) => {
                     self.inner
@@ -360,9 +418,26 @@ impl Server {
                         .lock()
                         .retain(|_, v| v.tenant_id != Some(*id));
                 }
+                CacheInvalidation::EmailNegative {
+                    domain_id,
+                    local_part_hash,
+                } => {
+                    negative_emails.insert((*domain_id, *local_part_hash));
+                }
             }
         }
+
+        if !negative_emails.is_empty() {
+            cache.emails_negative.retain(|key| {
+                !negative_emails.contains(&(key.domain_id, hash_local_part(&key.local_part)))
+            });
+        }
     }
+}
+
+#[inline(always)]
+fn hash_local_part(local_part: &str) -> u32 {
+    xxhash_rust::xxh3::xxh3_64(local_part.as_bytes()) as u32
 }
 
 impl From<CacheInvalidation> for CacheInvalidationBuilder {

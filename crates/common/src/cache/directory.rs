@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
-use crate::{Server, auth::DomainCache, ipc::BroadcastEvent};
+use crate::{Server, auth::DomainCache, cache::invalidate::CacheInvalidationBuilder};
 use registry::{
     schema::{
         prelude::{Object, ObjectType},
@@ -126,10 +126,18 @@ impl Server {
                         .await
                         .caused_by(trc::location!())?
                     {
-                        RegistryWriteResult::Success(id) => Ok(AccountWithId {
-                            id: id.document_id(),
-                            account: updated_account.into(),
-                        }),
+                        RegistryWriteResult::Success(id) => {
+                            let mut invalidator = CacheInvalidationBuilder::default();
+                            invalidator.process_update(id, &current_account, &updated_account);
+                            self.invalidate_caches(invalidator)
+                                .await
+                                .caused_by(trc::location!())?;
+
+                            Ok(AccountWithId {
+                                id: id.document_id(),
+                                account: updated_account.into(),
+                            })
+                        }
                         failure => Err(trc::AuthEvent::Error
                             .into_err()
                             .caused_by(trc::location!())
@@ -159,8 +167,6 @@ impl Server {
                             enabled: true,
                             description: None,
                         });
-
-                        self.invalidate_local_negative_account_cache(local, alias_domain.id);
                     }
                 }
                 let mut member_group_ids = Vec::with_capacity(account.groups.len());
@@ -212,9 +218,11 @@ impl Server {
                     .caused_by(trc::location!())?
                 {
                     RegistryWriteResult::Success(id) => {
-                        self.invalidate_local_negative_account_cache(local, domain.id);
-                        self.cluster_broadcast(BroadcastEvent::CacheInvalidateNegative)
-                            .await;
+                        let mut invalidator = CacheInvalidationBuilder::default();
+                        invalidator.process_create(&account);
+                        self.invalidate_caches(invalidator)
+                            .await
+                            .caused_by(trc::location!())?;
 
                         Ok(AccountWithId {
                             id: id.document_id(),
@@ -287,17 +295,26 @@ impl Server {
                 }
 
                 if has_changes {
+                    let updated_account = Object::from(Account::Group(updated_account));
                     match self
                         .registry()
                         .write(RegistryWrite::update(
                             Id::from(account_id),
-                            &Object::from(Account::Group(updated_account)),
+                            &updated_account,
                             &current_account,
                         ))
                         .await
                         .caused_by(trc::location!())?
                     {
-                        RegistryWriteResult::Success(id) => Ok(id.document_id()),
+                        RegistryWriteResult::Success(id) => {
+                            let mut invalidator = CacheInvalidationBuilder::default();
+                            invalidator.process_update(id, &current_account, &updated_account);
+                            self.invalidate_caches(invalidator)
+                                .await
+                                .caused_by(trc::location!())?;
+
+                            Ok(id.document_id())
+                        }
                         failure => Err(trc::AuthEvent::Error
                             .into_err()
                             .caused_by(trc::location!())
@@ -324,8 +341,6 @@ impl Server {
                             enabled: true,
                             description: None,
                         });
-
-                        self.invalidate_local_negative_account_cache(local, alias_domain.id);
                     }
                 }
 
@@ -358,7 +373,11 @@ impl Server {
                     .caused_by(trc::location!())?
                 {
                     RegistryWriteResult::Success(id) => {
-                        self.invalidate_local_negative_account_cache(local, domain.id);
+                        let mut invalidator = CacheInvalidationBuilder::default();
+                        invalidator.process_create(&account);
+                        self.invalidate_caches(invalidator)
+                            .await
+                            .caused_by(trc::location!())?;
 
                         Ok(id.document_id())
                     }

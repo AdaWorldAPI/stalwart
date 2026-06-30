@@ -12,7 +12,7 @@ use jmap_proto::{
     method::set::{SetRequest, SetResponse},
     object::push_subscription::{self, PushSubscriptionProperty, PushSubscriptionValue},
     references::resolve::ResolveCreatedReference,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::date::UTCDate,
 };
 use jmap_tools::{Key, Map, Value};
@@ -25,7 +25,7 @@ use store::{
     write::{AlignedBytes, Archive, Archiver, BatchBuilder, now},
 };
 use trc::{AddContext, ServerEvent};
-use types::{collection::Collection, field::PrincipalField};
+use types::{collection::Collection, field::PrincipalField, id::Id};
 use utils::map::bitmap::Bitmap;
 
 const EXPIRES_MAX: i64 = 7 * 24 * 3600; // 7 days
@@ -76,7 +76,7 @@ impl PushSubscriptionSet for Server {
 
         // Prepare response
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
         let account = self.account(account_id).await.caused_by(trc::location!())?;
 
         // Process creates
@@ -96,7 +96,7 @@ impl PushSubscriptionSet for Server {
             for (property, mut value) in object.into_expanded_object() {
                 if let Err(err) = response
                     .resolve_self_references(&mut value, 0, false)
-                    .and_then(|_| validate_push_value(&property, value, &mut push, true))
+                    .and_then(|_| validate_push_value(None, &property, value, &mut push, true))
                 {
                     response.not_created.append(id, err);
                     continue 'create;
@@ -154,7 +154,14 @@ impl PushSubscriptionSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -175,7 +182,7 @@ impl PushSubscriptionSet for Server {
             for (property, mut value) in object.into_expanded_object() {
                 if let Err(err) = response
                     .resolve_self_references(&mut value, 0, false)
-                    .and_then(|_| validate_push_value(&property, value, push, false))
+                    .and_then(|_| validate_push_value(Some(id), &property, value, push, false))
                 {
                     response.not_updated.append(id, err);
                     continue 'update;
@@ -269,6 +276,7 @@ impl PushSubscriptionSet for Server {
 }
 
 fn validate_push_value(
+    expected_id: Option<Id>,
     property: &Key<PushSubscriptionProperty>,
     value: Value<'_, PushSubscriptionProperty, PushSubscriptionValue>,
     push: &mut PushSubscription,
@@ -350,6 +358,13 @@ fn validate_push_value(
             push.types = Bitmap::all();
         }
         (PushSubscriptionProperty::VerificationCode, Value::Null) => {}
+        (PushSubscriptionProperty::Id, value) => {
+            if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                return Err(SetError::invalid_properties()
+                    .with_property(PushSubscriptionProperty::Id)
+                    .with_description("The id property is immutable."));
+            }
+        }
         (property, _) => {
             return Err(SetError::invalid_properties()
                 .with_property(property.clone())

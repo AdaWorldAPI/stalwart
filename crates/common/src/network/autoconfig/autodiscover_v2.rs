@@ -11,10 +11,15 @@ impl Server {
     pub async fn handle_autodiscover_v2_request(
         &self,
         query: Option<&str>,
+        path_email: Option<&str>,
     ) -> trc::Result<Result<Resource<Vec<u8>>, String>> {
         // Parse query parameters
         let params = UrlParams::new(query);
-        let emailaddress = params.get("Email").unwrap_or_default().to_lowercase();
+        let emailaddress = path_email
+            .filter(|email| !email.is_empty())
+            .or_else(|| params.get("Email"))
+            .unwrap_or_default()
+            .to_lowercase();
         let protocol = params.get("Protocol").unwrap_or_default();
 
         // Validate email address

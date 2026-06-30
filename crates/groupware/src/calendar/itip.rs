@@ -64,6 +64,7 @@ pub trait ItipIngest: Sync + Send {
     fn http_rsvp_url(
         &self,
         account_id: u32,
+        account_name: &str,
         document_id: u32,
         attendee: &str,
     ) -> impl Future<Output = Option<ItipRsvpUrl>> + Send;
@@ -397,6 +398,7 @@ impl ItipIngest for Server {
     async fn http_rsvp_url(
         &self,
         account_id: u32,
+        account_name: &str,
         document_id: u32,
         attendee: &str,
     ) -> Option<ItipRsvpUrl> {
@@ -405,8 +407,10 @@ impl ItipIngest for Server {
                 .encode_access_token(
                     GrantType::Rsvp,
                     account_id,
-                    &format!("{attendee};{document_id}"),
+                    account_name,
                     self.core.groupware.itip_http_rsvp_expiration,
+                    Some(&format!("{attendee};{document_id}")),
+                    None,
                 )
                 .await
             {
@@ -560,16 +564,16 @@ async fn decode_rsvp_response(server: &Server, query: &str) -> Option<RsvpRespon
         .validate_access_token(GrantType::Rsvp.into(), token)
         .await
         .ok()?;
-    let (attendee, document_id) =
-        token
-            .client_id
-            .rsplit_once(';')
-            .and_then(|(attendee, doc_id)| {
-                doc_id
-                    .parse::<u32>()
-                    .ok()
-                    .map(|doc_id| (attendee.to_string(), doc_id))
-            })?;
+    let (attendee, document_id) = token
+        .claims
+        .as_deref()
+        .and_then(|claims| claims.rsplit_once(';'))
+        .and_then(|(attendee, doc_id)| {
+            doc_id
+                .parse::<u32>()
+                .ok()
+                .map(|doc_id| (attendee.to_string(), doc_id))
+        })?;
 
     RsvpResponse {
         account_id: token.account_id,

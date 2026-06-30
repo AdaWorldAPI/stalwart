@@ -82,7 +82,7 @@ pub async fn test(test: &TestServer) {
                 ..Default::default()
             })]),
             aliases: List::from_iter([EmailAlias {
-                name: "!invalid".to_string(),
+                name: "inva..lid".to_string(),
                 domain_id,
                 enabled: true,
                 ..Default::default()

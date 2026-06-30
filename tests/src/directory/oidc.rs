@@ -13,6 +13,7 @@ use registry::{schema::structs, types::map::Map};
 
 pub async fn test() {
     println!("Running OIDC directory tests...");
+    crate::utils::containers::ensure_keycloak().await;
     let config = structs::OidcDirectory {
         description: "Test OIDC directory".to_string(),
         issuer_url: "http://localhost:9080/realms/stalwart".to_string(),
@@ -70,6 +71,55 @@ pub async fn test() {
         }
     );
 
+    // Test ODIC userinfo fallback
+    let mut config_userinfo_fallback = config.clone();
+    config_userinfo_fallback.claim_username = "email".to_string();
+    config_userinfo_fallback.require_scopes = Map::new(vec!["openid".to_string()]);
+
+    let token_openid_only = get_token_for_client(
+        "stalwart-fallback",
+        "stalwart-fallback-secret",
+        "john.doe@example.org",
+        "this is an OIDC password",
+        "openid",
+    )
+    .await;
+
+    let mut oidc_broken_userinfo = OpenIdDirectory::open(config_userinfo_fallback.clone())
+        .await
+        .unwrap();
+    if let Directory::OpenId(directory) = &mut oidc_broken_userinfo {
+        directory.discovery.document.userinfo_endpoint = "http://invalid".to_string();
+    }
+    assert!(
+        oidc_broken_userinfo
+            .authenticate(&Credentials::Bearer {
+                username: None,
+                token: token_openid_only.clone(),
+            })
+            .await
+            .is_err()
+    );
+    let oidc_userinfo_fallback = OpenIdDirectory::open(config_userinfo_fallback)
+        .await
+        .unwrap();
+    assert_eq!(
+        oidc_userinfo_fallback
+            .authenticate(&Credentials::Bearer {
+                username: None,
+                token: token_openid_only,
+            })
+            .await
+            .unwrap(),
+        Account {
+            email: "john.doe@example.org".to_string(),
+            email_aliases: vec![],
+            secret: None,
+            groups: vec!["sales@example.org".to_string()],
+            description: None,
+        }
+    );
+
     // Not matching the required audience should fail
     let mut config_wrong_audience = config.clone();
     config_wrong_audience.require_audience = Some("wrong_audience".to_string());
@@ -115,17 +165,34 @@ pub async fn test() {
 }
 
 async fn get_token(username: &str, password: &str) -> String {
+    get_token_for_client(
+        "stalwart",
+        "stalwart-secret",
+        username,
+        password,
+        "openid email profile",
+    )
+    .await
+}
+
+async fn get_token_for_client(
+    client_id: &str,
+    client_secret: &str,
+    username: &str,
+    password: &str,
+    scope: &str,
+) -> String {
     let client = reqwest::Client::new();
 
     let response = client
         .post("http://localhost:9080/realms/stalwart/protocol/openid-connect/token")
         .form(&[
             ("grant_type", "password"),
-            ("client_id", "stalwart"),
-            ("client_secret", "stalwart-secret"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
             ("username", username),
             ("password", password),
-            ("scope", "openid email profile"),
+            ("scope", scope),
         ])
         .send()
         .await

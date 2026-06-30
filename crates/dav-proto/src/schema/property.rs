@@ -12,7 +12,7 @@ use super::{
 use crate::{Depth, Timeout};
 use calcard::{
     icalendar::{ICalendar, ICalendarComponentType, ICalendarProperty},
-    vcard::{VCard, VCardProperty},
+    vcard::{VCard, VCardProperty, VCardVersion},
 };
 use types::{
     TimeRange,
@@ -72,7 +72,11 @@ pub enum CardDavProperty {
     SupportedAddressData,
     SupportedCollationSet,
     MaxResourceSize,
-    AddressData(Vec<CardDavPropertyName>),
+    AddressData {
+        properties: Vec<CardDavPropertyName>,
+        #[cfg_attr(test, serde(skip))]
+        version: Option<VCardVersion>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -204,6 +204,7 @@ async fn lmtp_delivery() {
         .expect_message_for_queue_then_deliver("default")
         .await
         .try_deliver(local.server.clone());
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let mut dsn = Vec::new();
     loop {
         match local.try_read_event().await {

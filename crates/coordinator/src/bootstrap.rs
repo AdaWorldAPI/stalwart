@@ -48,6 +48,12 @@ impl Coordinator {
                     .await
                     .map(unwrap_redis)
             }
+            #[cfg(feature = "redis")]
+            structs::Coordinator::RedisSentinel(redis_sentinel_store) => {
+                store::backend::redis::RedisStore::open_sentinel(redis_sentinel_store)
+                    .await
+                    .map(unwrap_redis)
+            }
             _ => Err("Binary was not compiled with the selected coordinator backend".to_string()),
         };
 

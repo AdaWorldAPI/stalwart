@@ -13,7 +13,7 @@ use common::config::{
     smtp::queue::{HostOrIp, MxConfig, RelayConfig},
 };
 use directory::Credentials;
-use mail_auth::IpLookupStrategy;
+use mail_auth::{DnssecStatus, IpLookupStrategy};
 use smtp_proto::{Response, Severity};
 use std::{borrow::Cow, net::IpAddr};
 
@@ -233,6 +233,7 @@ pub enum NextHop<'x> {
         is_implicit: bool,
         host: &'x str,
         config: &'x MxConfig,
+        dnssec_status: DnssecStatus,
     },
 }
 
@@ -332,6 +333,13 @@ impl NextHop<'_> {
         match self {
             NextHop::MX { .. } => true,
             NextHop::Relay(host) => host.protocol == ServerProtocol::Smtp,
+        }
+    }
+
+    fn dnssec_status(&self) -> DnssecStatus {
+        match self {
+            NextHop::MX { dnssec_status, .. } => *dnssec_status,
+            NextHop::Relay(_) => DnssecStatus::Indeterminate,
         }
     }
 }

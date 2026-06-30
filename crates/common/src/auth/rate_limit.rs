@@ -18,10 +18,11 @@ impl Server {
         access_token: &AccessToken,
         addr: IpAddr,
     ) -> trc::Result<Option<InFlight>> {
-        let is_rate_allowed = if let Some(rate) = &self.core.network.http.rate_authenticated {
-            self.is_ip_allowed(addr)
-                || self
-                    .core
+        let rate_reset = if let Some(rate) = &self.core.network.http.rate_authenticated {
+            if self.is_ip_allowed(addr) {
+                None
+            } else {
+                self.core
                     .storage
                     .memory
                     .is_rate_allowed(
@@ -32,34 +33,42 @@ impl Server {
                     )
                     .await
                     .caused_by(trc::location!())?
-                    .is_none()
+                    .map(|reset| (reset, rate.count))
+            }
         } else {
-            true
+            None
         };
 
-        if is_rate_allowed {
+        if let Some((reset, count)) = rate_reset {
+            if access_token.has_permission(Permission::UnlimitedRequests) {
+                Ok(None)
+            } else {
+                Err(trc::LimitEvent::TooManyRequests
+                    .into_err()
+                    .ctx(trc::Key::Expires, reset)
+                    .ctx(trc::Key::Limit, count))
+            }
+        } else {
             match access_token.is_http_request_allowed() {
                 LimiterResult::Allowed(in_flight) => Ok(Some(in_flight)),
                 LimiterResult::Forbidden => {
                     if access_token.has_permission(Permission::UnlimitedRequests) {
                         Ok(None)
                     } else {
-                        Err(trc::LimitEvent::ConcurrentRequest.into_err())
+                        Err(trc::LimitEvent::ConcurrentRequest
+                            .into_err()
+                            .ctx(trc::Key::Limit, access_token.concurrent_http_requests()))
                     }
                 }
                 LimiterResult::Disabled => Ok(None),
             }
-        } else if access_token.has_permission(Permission::UnlimitedRequests) {
-            Ok(None)
-        } else {
-            Err(trc::LimitEvent::TooManyRequests.into_err())
         }
     }
 
     pub async fn is_http_anonymous_request_allowed(&self, addr: IpAddr) -> trc::Result<()> {
         if let Some(rate) = &self.core.network.http.rate_anonymous
             && !self.is_ip_allowed(addr)
-            && self
+            && let Some(reset) = self
                 .core
                 .storage
                 .memory
@@ -71,9 +80,11 @@ impl Server {
                 )
                 .await
                 .caused_by(trc::location!())?
-                .is_some()
         {
-            return Err(trc::LimitEvent::TooManyRequests.into_err());
+            return Err(trc::LimitEvent::TooManyRequests
+                .into_err()
+                .ctx(trc::Key::Expires, reset)
+                .ctx(trc::Key::Limit, rate.count));
         }
         Ok(())
     }
@@ -85,7 +96,9 @@ impl Server {
                 if access_token.has_permission(Permission::UnlimitedRequests) {
                     Ok(None)
                 } else {
-                    Err(trc::LimitEvent::ConcurrentUpload.into_err())
+                    Err(trc::LimitEvent::ConcurrentUpload
+                        .into_err()
+                        .ctx(trc::Key::Limit, access_token.concurrent_uploads()))
                 }
             }
             LimiterResult::Disabled => Ok(None),

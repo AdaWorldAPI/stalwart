@@ -54,6 +54,8 @@ pub struct OAuthCode {
     pub nonce: Option<String>,
     pub params: String,
     pub code_challenge: PkceCodeChallenge,
+    pub scope: Option<String>,
+    pub resources: Vec<String>,
 }
 
 #[derive(

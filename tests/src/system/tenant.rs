@@ -529,6 +529,7 @@ pub async fn test(test: &mut TestServer) {
                 sender_authenticated: true,
                 recipients: vec![IngestRecipient {
                     address: "user@tenantx.org".to_string(),
+                    orcpt: None,
                     is_spam: false
                 }],
                 message_blob: message_blob.clone(),
@@ -565,6 +566,7 @@ pub async fn test(test: &mut TestServer) {
                 sender_authenticated: true,
                 recipients: vec![IngestRecipient {
                     address: "user@tenantx.org".to_string(),
+                    orcpt: None,
                     is_spam: false
                 }],
                 message_blob,

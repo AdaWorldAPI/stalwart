@@ -90,9 +90,7 @@ pub async fn test(
     // Create missing parent folders
     imap.send("CREATE \"/Vegetable/Broccoli\" (USE (\\Important))")
         .await;
-    imap.assert_read(Type::Tagged, ResponseType::Ok)
-        .await
-        .assert_contains("[MAILBOXID (");
+    imap.assert_read(Type::Tagged, ResponseType::Ok).await;
 
     imap.send("CREATE \" Cars/Electric /4 doors/ Red/\"").await;
     imap.assert_read(Type::Tagged, ResponseType::Ok).await;

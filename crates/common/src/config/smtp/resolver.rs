@@ -8,8 +8,11 @@ use mail_auth::{
     MessageAuthenticator,
     hickory_resolver::{
         TokioResolver,
-        config::{NameServerConfig, ProtocolConfig, ResolverConfig, ResolverOpts},
-        name_server::TokioConnectionProvider,
+        config::{
+            CLOUDFLARE, ConnectionConfig, GOOGLE, NameServerConfig, ProtocolConfig, QUAD9,
+            ResolverConfig, ResolverOpts,
+        },
+        net::runtime::TokioRuntimeProvider,
         system_conf::read_system_conf,
     },
 };
@@ -22,7 +25,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
-    net::SocketAddr,
     str::FromStr,
     sync::Arc,
 };
@@ -32,6 +34,7 @@ use utils::cache::CacheItemWeight;
 pub struct Resolvers {
     pub dns: MessageAuthenticator,
     pub dnssec: DnssecResolver,
+    pub dnssec_available: bool,
 }
 
 #[derive(Clone)]
@@ -39,11 +42,18 @@ pub struct DnssecResolver {
     pub resolver: TokioResolver,
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TlsaMatching {
+    Full,
+    Sha256,
+    Sha512,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TlsaEntry {
     pub is_end_entity: bool,
-    pub is_sha256: bool,
     pub is_spki: bool,
+    pub matching: TlsaMatching,
     pub data: Vec<u8>,
 }
 
@@ -124,22 +134,28 @@ impl Resolvers {
                         ObjectType::DnsResolver.singleton(),
                         format!("Failed to read system DNS config: {err}"),
                     );
-                    resolver_config = ResolverConfig::cloudflare();
+                    resolver_config = ResolverConfig::udp_and_tcp(&CLOUDFLARE);
                 }
             },
             DnsResolver::Custom(resolver) => {
                 resolver_config = ResolverConfig::default();
 
                 for server in resolver.servers {
-                    resolver_config.add_name_server(NameServerConfig::new(
-                        SocketAddr::new(server.address.into_inner(), server.port as u16),
-                        match server.protocol {
-                            DnsResolverProtocol::Udp => ProtocolConfig::Udp,
-                            DnsResolverProtocol::Tcp => ProtocolConfig::Tcp,
-                            DnsResolverProtocol::Tls => ProtocolConfig::Tls {
-                                server_name: Arc::from(server.address.to_string()),
-                            },
+                    let ip = server.address.into_inner();
+                    let port = server.port as u16;
+                    let protocol = match server.protocol {
+                        DnsResolverProtocol::Udp => ProtocolConfig::Udp,
+                        DnsResolverProtocol::Tcp => ProtocolConfig::Tcp,
+                        DnsResolverProtocol::Tls => ProtocolConfig::Tls {
+                            server_name: Arc::from(server.address.to_string()),
                         },
+                    };
+                    let mut connection = ConnectionConfig::new(protocol);
+                    connection.port = port;
+                    resolver_config.add_name_server(NameServerConfig::new(
+                        ip,
+                        true,
+                        vec![connection],
                     ));
                 }
 
@@ -152,9 +168,9 @@ impl Resolvers {
             }
             DnsResolver::Cloudflare(resolver) => {
                 resolver_config = if resolver.use_tls {
-                    ResolverConfig::cloudflare_tls()
+                    ResolverConfig::tls(&CLOUDFLARE)
                 } else {
-                    ResolverConfig::cloudflare()
+                    ResolverConfig::udp_and_tcp(&CLOUDFLARE)
                 };
 
                 opts.num_concurrent_reqs = resolver.concurrency as usize;
@@ -166,9 +182,9 @@ impl Resolvers {
             }
             DnsResolver::Quad9(resolver) => {
                 resolver_config = if resolver.use_tls {
-                    ResolverConfig::quad9_tls()
+                    ResolverConfig::tls(&QUAD9)
                 } else {
-                    ResolverConfig::quad9()
+                    ResolverConfig::udp_and_tcp(&QUAD9)
                 };
                 opts.num_concurrent_reqs = resolver.concurrency as usize;
                 opts.timeout = resolver.timeout.into_inner();
@@ -178,7 +194,7 @@ impl Resolvers {
                 opts.edns0 = resolver.enable_edns;
             }
             DnsResolver::Google(resolver) => {
-                resolver_config = ResolverConfig::google();
+                resolver_config = ResolverConfig::udp_and_tcp(&GOOGLE);
                 opts.num_concurrent_reqs = resolver.concurrency as usize;
                 opts.timeout = resolver.timeout.into_inner();
                 opts.preserve_intermediates = resolver.preserve_intermediates;
@@ -196,18 +212,41 @@ impl Resolvers {
         let mut opts_dnssec = opts.clone();
         opts_dnssec.validate = true;
 
+        let dnssec = DnssecResolver {
+            resolver: TokioResolver::builder_with_config(
+                config_dnssec,
+                TokioRuntimeProvider::default(),
+            )
+            .with_options(opts_dnssec)
+            .build()
+            .expect("Failed to build DNSSEC resolver"),
+        };
+
         Resolvers {
             dns: MessageAuthenticator::new(resolver_config, opts).unwrap(),
-            dnssec: DnssecResolver {
-                resolver: TokioResolver::builder_with_config(
-                    config_dnssec,
-                    TokioConnectionProvider::default(),
-                )
-                .with_options(opts_dnssec)
-                .build(),
-            },
+            #[cfg(not(feature = "test_mode"))]
+            dnssec_available: dnssec_capable(&dnssec.resolver).await,
+            #[cfg(feature = "test_mode")]
+            dnssec_available: true,
+            dnssec,
         }
     }
+}
+
+#[cfg(not(feature = "test_mode"))]
+async fn dnssec_capable(resolver: &TokioResolver) -> bool {
+    resolver
+        .lookup(
+            hickory_proto::rr::Name::root(),
+            hickory_proto::rr::RecordType::DNSKEY,
+        )
+        .await
+        .is_ok_and(|lookup| {
+            lookup
+                .answers()
+                .iter()
+                .any(|record| record.proof.is_secure())
+        })
 }
 
 impl Policy {
@@ -282,7 +321,10 @@ impl Default for Resolvers {
     fn default() -> Self {
         let (config, opts) = match read_system_conf() {
             Ok(conf) => conf,
-            Err(_) => (ResolverConfig::cloudflare(), ResolverOpts::default()),
+            Err(_) => (
+                ResolverConfig::udp_and_tcp(&CLOUDFLARE),
+                ResolverOpts::default(),
+            ),
         };
 
         let config_dnssec = config.clone();
@@ -294,11 +336,13 @@ impl Default for Resolvers {
             dnssec: DnssecResolver {
                 resolver: TokioResolver::builder_with_config(
                     config_dnssec,
-                    TokioConnectionProvider::default(),
+                    TokioRuntimeProvider::default(),
                 )
                 .with_options(opts_dnssec)
-                .build(),
+                .build()
+                .expect("Failed to build DNSSEC resolver"),
             },
+            dnssec_available: true,
         }
     }
 }
@@ -343,6 +387,7 @@ impl Clone for Resolvers {
         Self {
             dns: self.dns.clone(),
             dnssec: self.dnssec.clone(),
+            dnssec_available: self.dnssec_available,
         }
     }
 }

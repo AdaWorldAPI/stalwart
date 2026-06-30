@@ -209,16 +209,14 @@ impl JmapCalendarEventCopy for Server {
             *next_call = Call {
                 id: String::new(),
                 name: MethodName::new(MethodObject::CalendarEvent, MethodFunction::Set),
-                method: RequestMethod::Set(SetRequestMethod::CalendarEvent(Box::new(
-                    SetRequest {
-                        account_id: request.from_account_id,
-                        if_in_state: request.destroy_from_if_in_state,
-                        create: None,
-                        update: None,
-                        destroy: MaybeResultReference::Value(destroy_ids).into(),
-                        arguments: Default::default(),
-                    },
-                ))),
+                method: RequestMethod::Set(SetRequestMethod::CalendarEvent(Box::new(SetRequest {
+                    account_id: request.from_account_id,
+                    if_in_state: request.destroy_from_if_in_state,
+                    create: None,
+                    update: None,
+                    destroy: MaybeResultReference::Value(destroy_ids).into(),
+                    arguments: Default::default(),
+                }))),
             }
             .into();
         }

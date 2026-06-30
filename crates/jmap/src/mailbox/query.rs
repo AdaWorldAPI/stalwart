@@ -59,7 +59,7 @@ impl MailboxQuery for Server {
                             ));
                         }
                         MailboxFilter::Name(name) => {
-                            #[cfg(feature = "test_mode")]
+                            #[cfg(any(feature = "dev_mode", feature = "test_mode"))]
                             {
                                 // Used for concurrent requests tests
                                 if name == "__sleep" {

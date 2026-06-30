@@ -185,6 +185,7 @@ impl DavAclHandler for Server {
                             node,
                             account_id,
                             resource.document_id(),
+                            true,
                             &mut batch,
                         )
                         .caused_by(trc::location!())?;
@@ -256,7 +257,7 @@ impl DavAclHandler for Server {
 
         // Validate ACLs
         if !access_token.is_member(uri.account_id)
-            && !acls.effective_acl(access_token).contains(Acl::Read)
+            && !acls.effective_acl(access_token).contains(Acl::Share)
         {
             return Err(DavError::Code(StatusCode::FORBIDDEN));
         }

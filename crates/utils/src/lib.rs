@@ -26,6 +26,7 @@ use futures::StreamExt;
 pub use reqwest::Client;
 use reqwest::Response;
 pub use reqwest::header::HeaderMap;
+use std::borrow::Cow;
 use std::fmt::Write;
 
 pub trait HttpLimitResponse: Sync + Send {
@@ -145,27 +146,42 @@ pub async fn wait_for_shutdown() {
 }
 
 pub trait DomainPart {
-    fn to_lowercase_domain(&self) -> String;
+    fn to_lowercase_address(&self, lower_local: bool) -> String;
     fn domain_part(&self) -> &str;
     fn try_domain_part(&self) -> Option<&str>;
     fn try_local_part(&self) -> Option<&str>;
+    fn to_ascii_domain(&self) -> Option<Cow<'_, str>>;
 }
 
 impl<T: AsRef<str>> DomainPart for T {
-    fn to_lowercase_domain(&self) -> String {
+    fn to_lowercase_address(&self, lower_local: bool) -> String {
         let address = self.as_ref();
         if let Some((local, domain)) = address.rsplit_once('@') {
             let mut address = String::with_capacity(address.len());
-            address.push_str(local);
-            address.push('@');
-            for ch in domain.chars() {
-                for ch in ch.to_lowercase() {
-                    address.push(ch);
+            if lower_local {
+                for ch in local.chars() {
+                    for ch in ch.to_lowercase() {
+                        address.push(ch);
+                    }
                 }
+            } else {
+                address.push_str(local);
+            }
+            address.push('@');
+            if domain.is_ascii() {
+                for ch in domain.chars() {
+                    for ch in ch.to_lowercase() {
+                        address.push(ch);
+                    }
+                }
+            } else {
+                let domain =
+                    idna::domain_to_ascii(domain).unwrap_or_else(|_| domain.to_lowercase());
+                address.push_str(&domain);
             }
             address
         } else {
-            address.to_string()
+            address.to_lowercase()
         }
     }
 
@@ -185,6 +201,17 @@ impl<T: AsRef<str>> DomainPart for T {
             .rsplit_once('@')
             .map(|(_, d)| d)
             .unwrap_or_default()
+    }
+
+    #[inline(always)]
+    fn to_ascii_domain(&self) -> Option<Cow<'_, str>> {
+        let domain = self.as_ref();
+
+        if domain.is_ascii() {
+            Some(Cow::Borrowed(domain))
+        } else {
+            idna::domain_to_ascii(domain).ok().map(Cow::Owned)
+        }
     }
 }
 
@@ -213,10 +240,14 @@ pub fn sanitize_email(email: &str) -> Option<String> {
 
     for ch in chars.by_ref() {
         match ch {
-            '.' | '+' | '-' | '_' => {
-                if !last_ch.is_alphanumeric() {
+            '.' => {
+                if last_ch == NIL_CHAR || last_ch == '.' {
                     return None;
                 }
+                result.push('.');
+            }
+            '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '/' | '=' | '?' | '^' | '_'
+            | '`' | '{' | '|' | '}' | '~' => {
                 result.push(ch);
             }
             ' ' | '\x09'..='\x0d' => continue,
@@ -249,6 +280,8 @@ pub fn sanitize_email(email: &str) -> Option<String> {
     }
 
     last_ch = NIL_CHAR;
+    let domain_start = result.len();
+    let mut domain_is_ascii = true;
 
     for ch in chars {
         match ch {
@@ -260,6 +293,9 @@ pub fn sanitize_email(email: &str) -> Option<String> {
             }
             ' ' | '\x09'..='\x0d' => continue,
             _ => {
+                if !ch.is_ascii() {
+                    domain_is_ascii = false;
+                }
                 if ch.is_uppercase() {
                     for ch in ch.to_lowercase() {
                         result.push(ch);
@@ -275,12 +311,20 @@ pub fn sanitize_email(email: &str) -> Option<String> {
         last_ch = ch;
     }
 
-    if last_ch.is_alphanumeric()
-        && psl::domain(result.as_bytes()).is_some_and(|d| d.suffix().typ().is_some())
-    {
-        Some(result)
+    if !last_ch.is_alphanumeric() {
+        return None;
+    }
+
+    if domain_is_ascii {
+        is_valid_domain(&result[domain_start..]).then_some(result)
     } else {
-        None
+        let domain = idna::domain_to_ascii(&result[domain_start..]).ok()?;
+        if !is_valid_domain(&domain) {
+            return None;
+        }
+        result.truncate(domain_start);
+        result.push_str(&domain);
+        Some(result)
     }
 }
 
@@ -290,10 +334,14 @@ pub fn sanitize_email_local(local: &str) -> Option<String> {
 
     for ch in local.chars() {
         match ch {
-            '.' | '+' | '-' | '_' => {
-                if !last_ch.is_alphanumeric() {
+            '.' => {
+                if last_ch == NIL_CHAR || last_ch == '.' {
                     return None;
                 }
+                result.push('.');
+            }
+            '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '/' | '=' | '?' | '^' | '_'
+            | '`' | '{' | '|' | '}' | '~' => {
                 result.push(ch);
             }
             ' ' | '\x09'..='\x0d' => continue,
@@ -324,6 +372,7 @@ pub fn sanitize_domain(domain: &str) -> Option<String> {
     let mut result = String::with_capacity(domain.len());
     let mut found_dot = false;
     let mut last_ch = char::from(0);
+    let mut is_ascii = true;
 
     for ch in domain.chars() {
         if !ch.is_whitespace() {
@@ -332,6 +381,8 @@ pub fn sanitize_domain(domain: &str) -> Option<String> {
                 if !(last_ch.is_alphanumeric() || last_ch == '-' || last_ch == '_') {
                     return None;
                 }
+            } else if !ch.is_ascii() {
+                is_ascii = false;
             }
             last_ch = ch;
             for ch in ch.to_lowercase() {
@@ -340,12 +391,101 @@ pub fn sanitize_domain(domain: &str) -> Option<String> {
         }
     }
 
-    if found_dot
-        && last_ch != '.'
-        && psl::domain(result.as_bytes()).is_some_and(|d| d.suffix().typ().is_some())
-    {
-        Some(result)
+    if !(found_dot && last_ch != '.') {
+        return None;
+    }
+
+    if is_ascii {
+        is_valid_domain(&result).then_some(result)
     } else {
-        None
+        let domain = idna::domain_to_ascii(&result).ok()?;
+        is_valid_domain(&domain).then_some(domain)
+    }
+}
+
+pub fn is_valid_domain(domain: &str) -> bool {
+    const RESERVED_TLDS: &[&str] = &[
+        "test",
+        "localhost",
+        "local",
+        "internal",
+        "lan",
+        "home",
+        "corp",
+        "intranet",
+        "private",
+        "localdomain",
+    ];
+    psl::domain(domain.as_bytes()).is_some_and(|d| d.suffix().typ().is_some())
+        || RESERVED_TLDS.contains(&domain)
+        || domain
+            .rsplit_once('.')
+            .is_some_and(|(_, tld)| RESERVED_TLDS.contains(&tld))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::DomainPart;
+
+    use super::{sanitize_domain, sanitize_email};
+
+    #[test]
+    fn idn_domains_canonicalize_to_a_label() {
+        assert_eq!(
+            sanitize_domain("straß6.de").as_deref(),
+            Some("xn--stra6-oqa.de")
+        );
+        assert_eq!(
+            sanitize_domain("STRASS.straß6.DE").as_deref(),
+            Some("strass.xn--stra6-oqa.de")
+        );
+        assert_eq!(
+            sanitize_domain("münchen.de").as_deref(),
+            Some("xn--mnchen-3ya.de")
+        );
+    }
+
+    #[test]
+    fn a_label_and_ascii_domains_are_idempotent() {
+        assert_eq!(
+            sanitize_domain("xn--stra6-oqa.de").as_deref(),
+            Some("xn--stra6-oqa.de")
+        );
+        assert_eq!(
+            sanitize_domain(&sanitize_domain("straß6.de").unwrap()).as_deref(),
+            Some("xn--stra6-oqa.de")
+        );
+        assert_eq!(
+            sanitize_domain("Example.COM").as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn email_domain_part_canonicalizes_local_part_preserved() {
+        assert_eq!(
+            sanitize_email("cornelius_strauss@straß6.de").as_deref(),
+            Some("cornelius_strauss@xn--stra6-oqa.de")
+        );
+        assert_eq!(
+            sanitize_email("Foo.Bar@münchen.de").as_deref(),
+            Some("foo.bar@xn--mnchen-3ya.de")
+        );
+        assert_eq!(
+            sanitize_email("user@example.com").as_deref(),
+            Some("user@example.com")
+        );
+    }
+
+    #[test]
+    fn to_ascii_domain_borrows_ascii_owns_idn() {
+        assert!(matches!(
+            "example.com".to_ascii_domain(),
+            Some(std::borrow::Cow::Borrowed(_))
+        ));
+        assert!(matches!(
+            "straß6.de".to_ascii_domain(),
+            Some(std::borrow::Cow::Owned(_))
+        ));
     }
 }

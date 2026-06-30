@@ -393,14 +393,13 @@ impl QueueConfig {
                                 enums::MtaProtocol::Smtp => ServerProtocol::Smtp,
                                 enums::MtaProtocol::Lmtp => ServerProtocol::Lmtp,
                             },
-                            auth: route
-                                .auth_username
-                                .and_then(|user| secret.map(|secret| (user, secret)))
-                                .map(|(user, secret)| Credentials::Basic {
+                            auth: route.auth_username.zip(secret).map(|(user, secret)| {
+                                Credentials::Basic {
                                     username: user,
                                     secret: secret.into_owned(),
                                     mfa_token: None,
-                                }),
+                                }
+                            }),
                             tls_implicit: route.implicit_tls,
                             tls_allow_invalid_certs: route.allow_invalid_certs,
                         }),

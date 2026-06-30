@@ -194,66 +194,6 @@ pub fn rsa_key_parse(private_key: &[u8]) -> trc::Result<RsaKey<Sha256>> {
         })
 }
 
-/*impl ArcSealer {
-    pub fn new(selector: String, domain: String, signature: DkimSignature) -> trc::Result<Self> {
-        let mut errors = vec![];
-        if !signature.validate(&mut errors) {
-            return Err(trc::DkimEvent::BuildError
-                .reason("DKIM signature validation failed")
-                .details(
-                    errors
-                        .into_iter()
-                        .map(|v| trc::Value::from(v.to_string()))
-                        .collect::<Vec<_>>(),
-                ));
-        }
-
-        match signature {
-            DkimSignature::Dkim1Ed25519Sha256(signature) => {
-                let private_key = simple_pem_parse(&signature.private_key).ok_or_else(|| {
-                    trc::DkimEvent::BuildError
-                        .reason("Failed to parse ED25519 private key PEM")
-                        .details("Invalid PEM format")
-                })?;
-                let key =
-                    Ed25519Key::from_pkcs8_maybe_unchecked_der(&private_key).map_err(|err| {
-                        trc::DkimEvent::BuildError
-                            .reason(err)
-                            .details("Failed to build ED25519 key")
-                    })?;
-
-                Ok(ArcSealer::Ed25519Sha256(build_dkim1_sealer(
-                    domain, selector, signature, key,
-                )))
-            }
-            DkimSignature::Dkim1RsaSha256(signature) => {
-                let key = PrivatePkcs1KeyDer::from_pem_slice(signature.private_key.as_bytes())
-                    .map(PrivateKeyDer::Pkcs1)
-                    .or_else(|_| {
-                        PrivatePkcs8KeyDer::from_pem_slice(signature.private_key.as_bytes())
-                            .map(PrivateKeyDer::Pkcs8)
-                    })
-                    .map_err(|err| {
-                        trc::DkimEvent::BuildError
-                            .reason(err)
-                            .details("Failed to build RSA key")
-                    })
-                    .and_then(|key| {
-                        RsaKey::<Sha256>::from_key_der(key).map_err(|err| {
-                            trc::DkimEvent::BuildError
-                                .reason(err)
-                                .details("Failed to build RSA key")
-                        })
-                    })?;
-
-                Ok(ArcSealer::RsaSha256(build_dkim1_sealer(
-                    domain, selector, signature, key,
-                )))
-            }
-        }
-    }
-}*/
-
 pub fn simple_pem_parse(contents: &str) -> Option<Vec<u8>> {
     let mut contents = contents.as_bytes().iter().copied();
     let mut base64 = vec![];
@@ -337,59 +277,6 @@ fn build_dkim1_signer<T: SigningKey>(
     }
     signer
 }
-
-/*fn build_dkim1_sealer<T: SigningKey<Hasher = Sha256>>(
-    domain: String,
-    selector: String,
-    mut signature: Dkim1Signature,
-    key: T,
-) -> mail_auth::arc::ArcSealer<T, Done> {
-    if !signature
-        .headers
-        .iter()
-        .any(|h| h.eq_ignore_ascii_case("DKIM-Signature"))
-    {
-        signature
-            .headers
-            .push_unchecked("DKIM-Signature".to_string());
-    }
-
-    let mut sealer = mail_auth::arc::ArcSealer::from_key(key)
-        .domain(domain)
-        .selector(selector)
-        .headers(signature.headers);
-
-    match signature.canonicalization {
-        enums::DkimCanonicalization::RelaxedRelaxed => {
-            sealer = sealer
-                .body_canonicalization(Canonicalization::Relaxed)
-                .header_canonicalization(Canonicalization::Relaxed);
-        }
-        enums::DkimCanonicalization::SimpleSimple => {
-            sealer = sealer
-                .body_canonicalization(Canonicalization::Simple)
-                .header_canonicalization(Canonicalization::Simple);
-        }
-        enums::DkimCanonicalization::RelaxedSimple => {
-            sealer = sealer
-                .body_canonicalization(Canonicalization::Simple)
-                .header_canonicalization(Canonicalization::Relaxed);
-        }
-        enums::DkimCanonicalization::SimpleRelaxed => {
-            sealer = sealer
-                .body_canonicalization(Canonicalization::Relaxed)
-                .header_canonicalization(Canonicalization::Simple);
-        }
-    }
-
-    if let Some(expire) = signature.expire {
-        sealer = sealer.expiration(expire.into_inner().as_secs());
-    }
-
-    sealer
-}
-
-*/
 
 impl<'x> TryFrom<expr::Variable<'x>> for VerifyStrategy {
     type Error = ();

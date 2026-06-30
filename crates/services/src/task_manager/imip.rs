@@ -482,7 +482,9 @@ pub async fn build_itip_template(
 
     // Add RSVP buttons
     if matches!(summary, ItipSummary::Invite(_) | ItipSummary::Update { .. })
-        && let Some(rsvp_url) = server.http_rsvp_url(account_id, document_id, to).await
+        && let Some(rsvp_url) = server
+            .http_rsvp_url(account_id, account_info.name(), document_id, to)
+            .await
     {
         variables.insert_single(
             CalendarTemplateVariable::Rsvp,

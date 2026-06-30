@@ -47,9 +47,8 @@ impl BlobOperations for Server {
         mut request: GetRequest<Blob>,
         access_token: &AccessToken,
     ) -> trc::Result<GetResponse<Blob>> {
-        let ids = request
-            .unwrap_ids(self.core.jmap.get_max_objects)?
-            .unwrap_or_default();
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let ids = ids.unwrap_or_default();
         let properties = request.unwrap_properties(&[
             BlobProperty::Id,
             BlobProperty::Data(DataProperty::Default),
@@ -59,7 +58,7 @@ impl BlobOperations for Server {
             account_id: request.account_id.into(),
             state: None,
             list: Vec::with_capacity(ids.len()),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
 
         let range_from = request.arguments.offset.unwrap_or(0);
@@ -153,7 +152,7 @@ impl BlobOperations for Server {
                 // Add result to response
                 response.list.push(blob.into());
             } else {
-                response.not_found.push(blob_id);
+                response.push_not_found(blob_id);
             }
         }
 

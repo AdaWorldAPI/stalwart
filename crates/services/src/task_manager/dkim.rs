@@ -191,10 +191,25 @@ async fn dkim_management(server: &Server, task: &TaskDomainManagement) -> trc::R
         // Publish key
         if let Some((updater, origin)) = &dns_updater {
             let record = generate_dkim_dns_record(&signature, &domain.name).await?;
-            let signature_transition = if updater
-                .create(origin, &record.name, record.record, true, true)
+            let dns_update::DnsRecord::TXT(txt_value) = &record.record else {
+                return Ok(TaskResult::permanent(
+                    "DKIM record must be a TXT record".to_string(),
+                ));
+            };
+            let propagation_target = txt_value.clone();
+            let published = updater
+                .set_rrset(
+                    origin,
+                    &record.name,
+                    dns_update::DnsRecordType::TXT,
+                    vec![record.record.clone()],
+                )
                 .await
-                .is_ok_and(|did_propagate| did_propagate)
+                .is_ok();
+            let signature_transition = if published
+                && updater
+                    .wait_for_txt_propagation(&record.name, origin, &propagation_target)
+                    .await
             {
                 trc::event!(
                     Dkim(DkimEvent::SignaturePublished),
@@ -243,10 +258,27 @@ async fn dkim_management(server: &Server, task: &TaskDomainManagement) -> trc::R
     for signature in publish_signatures {
         let record = generate_dkim_dns_record(&signature.object, &domain.name).await?;
         if let Some((updater, origin)) = &dns_updater {
-            match updater
-                .create(origin, &record.name, record.record, true, true)
-                .await
-            {
+            let dns_update::DnsRecord::TXT(txt_value) = &record.record else {
+                return Ok(TaskResult::permanent(
+                    "DKIM record must be a TXT record".to_string(),
+                ));
+            };
+            let propagation_target = txt_value.clone();
+            let publish_result = updater
+                .set_rrset(
+                    origin,
+                    &record.name,
+                    dns_update::DnsRecordType::TXT,
+                    vec![record.record.clone()],
+                )
+                .await;
+            let propagation_result = match &publish_result {
+                Ok(_) => Ok(updater
+                    .wait_for_txt_propagation(&record.name, origin, &propagation_target)
+                    .await),
+                Err(err) => Err(err.clone()),
+            };
+            match propagation_result {
                 Ok(true) => {
                     let signature_transition =
                         UTCDateTime::from_timestamp((now + dkim.rotate_after.as_secs()) as i64);
@@ -354,7 +386,7 @@ async fn dkim_management(server: &Server, task: &TaskDomainManagement) -> trc::R
         let record = generate_dkim_dns_record_name(&signature.object, &domain.name);
         if let Some((updater, origin)) = &dns_updater {
             match updater
-                .delete(origin, &record, dns_update::DnsRecordType::TXT)
+                .set_rrset(origin, &record, dns_update::DnsRecordType::TXT, Vec::new())
                 .await
             {
                 Ok(_) => {

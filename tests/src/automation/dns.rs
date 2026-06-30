@@ -87,9 +87,8 @@ pub async fn test(test: &TestServer) {
     // Create test In Memory DNS servers
     let dns_server_id = account
         .registry_create_object(DnsServer::Cloudflare(DnsServerCloudflare {
-            email: "test@memory.org".to_string().into(),
             secret: SecretKey::Value(SecretKeyValue {
-                secret: "secret".into(),
+                secret: "test@memory.org".into(),
             }),
             description: "In-memory DNS server".to_string(),
             ..Default::default()

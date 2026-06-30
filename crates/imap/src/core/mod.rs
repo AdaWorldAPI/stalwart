@@ -52,6 +52,7 @@ pub struct Session<T: SessionStream> {
     pub is_condstore: bool,
     pub is_qresync: bool,
     pub is_utf8: bool,
+    pub is_objectid: bool,
     pub stream_rx: ReadHalf<T>,
     pub stream_tx: Arc<tokio::sync::Mutex<WriteHalf<T>>>,
     pub in_flight: InFlight,

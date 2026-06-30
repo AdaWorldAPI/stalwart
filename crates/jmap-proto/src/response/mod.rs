@@ -145,6 +145,7 @@ pub enum CopyResponseMethod {
     Email(CopyResponse<Email>),
     ContactCard(CopyResponse<ContactCard>),
     CalendarEvent(CopyResponse<CalendarEvent>),
+    FileNode(CopyResponse<FileNode>),
     Blob(CopyBlobResponse),
 }
 
@@ -534,7 +535,9 @@ impl From<ChangesResponse<CalendarEvent>> for ResponseMethod<'_> {
 
 impl From<ChangesResponse<CalendarEventNotification>> for ResponseMethod<'_> {
     fn from(response: ChangesResponse<CalendarEventNotification>) -> Self {
-        ResponseMethod::Changes(ChangesResponseMethod::CalendarEventNotification(Box::new(response)))
+        ResponseMethod::Changes(ChangesResponseMethod::CalendarEventNotification(Box::new(
+            response,
+        )))
     }
 }
 
@@ -592,6 +595,12 @@ impl From<CopyResponse<CalendarEvent>> for ResponseMethod<'_> {
     }
 }
 
+impl From<CopyResponse<FileNode>> for ResponseMethod<'_> {
+    fn from(value: CopyResponse<FileNode>) -> Self {
+        ResponseMethod::Copy(CopyResponseMethod::FileNode(value))
+    }
+}
+
 impl From<CalendarEventNotificationGetResponse> for ResponseMethod<'_> {
     fn from(value: CalendarEventNotificationGetResponse) -> Self {
         ResponseMethod::Get(GetResponseMethod::CalendarEventNotification(value))
@@ -600,6 +609,8 @@ impl From<CalendarEventNotificationGetResponse> for ResponseMethod<'_> {
 
 impl From<SetResponse<CalendarEventNotification>> for ResponseMethod<'_> {
     fn from(value: SetResponse<CalendarEventNotification>) -> Self {
-        ResponseMethod::Set(SetResponseMethod::CalendarEventNotification(Box::new(value)))
+        ResponseMethod::Set(SetResponseMethod::CalendarEventNotification(Box::new(
+            value,
+        )))
     }
 }

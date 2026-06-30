@@ -63,6 +63,9 @@ impl RunScript for Server {
             .with_envelope_list(params.envelope)
             .with_user_address(&params.from_addr)
             .with_user_full_name(&params.from_name);
+        if let Some(spam_status) = params.spam_status {
+            instance.set_spam_status(spam_status);
+        }
         let mut input = Input::script("__script", script);
         let mut messages: Vec<Vec<u8>> = Vec::new();
         let session_id = params.session_id;
@@ -161,11 +164,11 @@ impl RunScript for Server {
                         let mut message = self.new_message(params.return_path.as_str(), session_id);
                         match recipient {
                             Recipient::Address(rcpt) => {
-                                message.add_recipient(rcpt, self).await;
+                                message.expand_and_add_recipient(rcpt, self).await;
                             }
                             Recipient::Group(rcpt_list) => {
                                 for rcpt in rcpt_list {
-                                    message.add_recipient(rcpt, self).await;
+                                    message.expand_and_add_recipient(rcpt, self).await;
                                 }
                             }
                             Recipient::List(list) => {

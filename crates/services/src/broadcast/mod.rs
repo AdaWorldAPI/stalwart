@@ -107,6 +107,15 @@ impl BroadcastBatch<Vec<BroadcastEvent>> {
                             CacheInvalidation::List(id) => (7u8, *id),
                             CacheInvalidation::DomainLogo(id) => (8u8, *id),
                             CacheInvalidation::TenantLogo(id) => (9u8, *id),
+                            CacheInvalidation::EmailNegative {
+                                domain_id,
+                                local_part_hash,
+                            } => {
+                                serialized.push(10u8);
+                                let _ = serialized.write_leb128(*domain_id);
+                                let _ = serialized.write_leb128(*local_part_hash);
+                                continue;
+                            }
                         };
 
                         serialized.push(marker);
@@ -240,6 +249,14 @@ where
                             7 => CacheInvalidation::List(id),
                             8 => CacheInvalidation::DomainLogo(id),
                             9 => CacheInvalidation::TenantLogo(id),
+                            10 => {
+                                let local_part_hash =
+                                    self.messages.next_leb128::<u32>().ok_or(())?;
+                                CacheInvalidation::EmailNegative {
+                                    domain_id: id,
+                                    local_part_hash,
+                                }
+                            }
                             _ => return Err(()),
                         });
                     }

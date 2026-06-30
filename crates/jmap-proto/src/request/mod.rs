@@ -41,7 +41,20 @@ use crate::{
 };
 use jmap_tools::{Null, Value};
 use std::{collections::HashMap, fmt::Debug, str::FromStr};
+use types::id::Id;
 use utils::map::vec_map::VecMap;
+
+pub const INVALID_ACCOUNT_ID: u64 = u64::MAX - 1;
+
+pub fn deserialize_account_id<'de, A>(map: &mut A) -> Result<Id, A::Error>
+where
+    A: serde::de::MapAccess<'de>,
+{
+    Ok(map
+        .next_value::<MaybeInvalid<Id>>()?
+        .try_unwrap()
+        .unwrap_or_else(|| Id::from(INVALID_ACCOUNT_ID)))
+}
 
 #[derive(Debug)]
 pub struct Request<'x> {
@@ -125,6 +138,7 @@ pub enum CopyRequestMethod<'x> {
     Email(Box<CopyRequest<'x, Email>>),
     ContactCard(Box<CopyRequest<'x, ContactCard>>),
     CalendarEvent(Box<CopyRequest<'x, CalendarEvent>>),
+    FileNode(Box<CopyRequest<'x, FileNode>>),
     Blob(Box<CopyBlobRequest>),
 }
 
@@ -185,6 +199,24 @@ impl<'de, V: FromStr> serde::Deserialize<'de> for MaybeInvalid<V> {
         } else {
             Ok(MaybeInvalid::Invalid(value.to_string()))
         }
+    }
+}
+
+impl<V: FromStr + serde::Serialize> serde::Serialize for MaybeInvalid<V> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            MaybeInvalid::Value(v) => v.serialize(serializer),
+            MaybeInvalid::Invalid(s) => serializer.serialize_str(s),
+        }
+    }
+}
+
+impl<V: FromStr> From<V> for MaybeInvalid<V> {
+    fn from(value: V) -> Self {
+        MaybeInvalid::Value(value)
     }
 }
 

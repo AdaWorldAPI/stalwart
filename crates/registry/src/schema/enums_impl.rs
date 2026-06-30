@@ -807,6 +807,59 @@ impl<'de> serde::Deserialize<'de> for AsnType {
     }
 }
 
+impl EnumImpl for AzureEnvironment {
+    fn parse(value: &str) -> Option<Self> {
+        hashify::tiny_map! {
+            value.as_bytes(),
+            b"public" => AzureEnvironment::Public,
+            b"china" => AzureEnvironment::China,
+            b"us-government" => AzureEnvironment::UsGovernment,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            AzureEnvironment::Public => "public",
+            AzureEnvironment::China => "china",
+            AzureEnvironment::UsGovernment => "us-government",
+        }
+    }
+
+    fn to_id(&self) -> u16 {
+        *self as u16
+    }
+
+    fn from_id(id: u16) -> Option<Self> {
+        match id {
+            0 => Some(AzureEnvironment::Public),
+            1 => Some(AzureEnvironment::China),
+            2 => Some(AzureEnvironment::UsGovernment),
+            _ => None,
+        }
+    }
+
+    const COUNT: usize = 3;
+}
+
+impl serde::Serialize for AzureEnvironment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AzureEnvironment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = Cow::<str>::deserialize(deserializer)?;
+        Self::parse(&s).ok_or_else(|| serde::de::Error::unknown_variant(&s, &[]))
+    }
+}
+
 impl EnumImpl for BlobStoreBaseType {
     fn parse(value: &str) -> Option<Self> {
         hashify::tiny_map! {
@@ -1349,6 +1402,7 @@ impl EnumImpl for CoordinatorType {
             b"Zenoh" => CoordinatorType::Zenoh,
             b"Redis" => CoordinatorType::Redis,
             b"RedisCluster" => CoordinatorType::RedisCluster,
+            b"RedisSentinel" => CoordinatorType::RedisSentinel,
         }
     }
 
@@ -1361,6 +1415,7 @@ impl EnumImpl for CoordinatorType {
             CoordinatorType::Zenoh => "Zenoh",
             CoordinatorType::Redis => "Redis",
             CoordinatorType::RedisCluster => "RedisCluster",
+            CoordinatorType::RedisSentinel => "RedisSentinel",
         }
     }
 
@@ -1377,11 +1432,12 @@ impl EnumImpl for CoordinatorType {
             4 => Some(CoordinatorType::Zenoh),
             5 => Some(CoordinatorType::Redis),
             6 => Some(CoordinatorType::RedisCluster),
+            7 => Some(CoordinatorType::RedisSentinel),
             _ => None,
         }
     }
 
-    const COUNT: usize = 7;
+    const COUNT: usize = 8;
 }
 
 impl serde::Serialize for CoordinatorType {
@@ -2776,11 +2832,12 @@ impl<'de> serde::Deserialize<'de> for DnsResolverType {
 
 impl EnumImpl for DnsServerBootstrapType {
     fn parse(value: &str) -> Option<Self> {
-        hashify::tiny_map! {
+        hashify::map! {
             value.as_bytes(),
+            DnsServerBootstrapType,
             b"Manual" => DnsServerBootstrapType::Manual,
             b"Tsig" => DnsServerBootstrapType::Tsig,
-            b"Sig0" => DnsServerBootstrapType::Sig0,
+            b"Deprecated1" => DnsServerBootstrapType::Deprecated1,
             b"Cloudflare" => DnsServerBootstrapType::Cloudflare,
             b"DigitalOcean" => DnsServerBootstrapType::DigitalOcean,
             b"DeSEC" => DnsServerBootstrapType::DeSEC,
@@ -2791,14 +2848,73 @@ impl EnumImpl for DnsServerBootstrapType {
             b"Spaceship" => DnsServerBootstrapType::Spaceship,
             b"Route53" => DnsServerBootstrapType::Route53,
             b"GoogleCloudDns" => DnsServerBootstrapType::GoogleCloudDns,
+            b"Alidns" => DnsServerBootstrapType::Alidns,
+            b"ArvanCloud" => DnsServerBootstrapType::ArvanCloud,
+            b"Autodns" => DnsServerBootstrapType::Autodns,
+            b"AzureDns" => DnsServerBootstrapType::AzureDns,
+            b"BaiduCloud" => DnsServerBootstrapType::BaiduCloud,
+            b"BluecatV2" => DnsServerBootstrapType::BluecatV2,
+            b"ClouDns" => DnsServerBootstrapType::ClouDns,
+            b"Constellix" => DnsServerBootstrapType::Constellix,
+            b"Cpanel" => DnsServerBootstrapType::Cpanel,
+            b"Ddnss" => DnsServerBootstrapType::Ddnss,
+            b"DnsMadeEasy" => DnsServerBootstrapType::DnsMadeEasy,
+            b"Domeneshop" => DnsServerBootstrapType::Domeneshop,
+            b"Dreamhost" => DnsServerBootstrapType::Dreamhost,
+            b"DuckDns" => DnsServerBootstrapType::DuckDns,
+            b"Dynu" => DnsServerBootstrapType::Dynu,
+            b"EasyDns" => DnsServerBootstrapType::EasyDns,
+            b"EdgeDns" => DnsServerBootstrapType::EdgeDns,
+            b"Exoscale" => DnsServerBootstrapType::Exoscale,
+            b"FreeMyIp" => DnsServerBootstrapType::FreeMyIp,
+            b"GandiV5" => DnsServerBootstrapType::GandiV5,
+            b"Gcore" => DnsServerBootstrapType::Gcore,
+            b"Glesys" => DnsServerBootstrapType::Glesys,
+            b"Godaddy" => DnsServerBootstrapType::Godaddy,
+            b"Hetzner" => DnsServerBootstrapType::Hetzner,
+            b"HostingDe" => DnsServerBootstrapType::HostingDe,
+            b"Hostinger" => DnsServerBootstrapType::Hostinger,
+            b"HuaweiCloud" => DnsServerBootstrapType::HuaweiCloud,
+            b"Hurricane" => DnsServerBootstrapType::Hurricane,
+            b"IbmCloud" => DnsServerBootstrapType::IbmCloud,
+            b"Infoblox" => DnsServerBootstrapType::Infoblox,
+            b"Infomaniak" => DnsServerBootstrapType::Infomaniak,
+            b"Inwx" => DnsServerBootstrapType::Inwx,
+            b"Ionos" => DnsServerBootstrapType::Ionos,
+            b"Ipv64" => DnsServerBootstrapType::Ipv64,
+            b"Joker" => DnsServerBootstrapType::Joker,
+            b"Lightsail" => DnsServerBootstrapType::Lightsail,
+            b"Linode" => DnsServerBootstrapType::Linode,
+            b"LuaDns" => DnsServerBootstrapType::LuaDns,
+            b"MythicBeasts" => DnsServerBootstrapType::MythicBeasts,
+            b"Namecheap" => DnsServerBootstrapType::Namecheap,
+            b"NameDotCom" => DnsServerBootstrapType::NameDotCom,
+            b"NameSilo" => DnsServerBootstrapType::NameSilo,
+            b"Netcup" => DnsServerBootstrapType::Netcup,
+            b"Netlify" => DnsServerBootstrapType::Netlify,
+            b"Nifcloud" => DnsServerBootstrapType::Nifcloud,
+            b"Ns1" => DnsServerBootstrapType::Ns1,
+            b"OracleCloud" => DnsServerBootstrapType::OracleCloud,
+            b"Plesk" => DnsServerBootstrapType::Plesk,
+            b"Safedns" => DnsServerBootstrapType::Safedns,
+            b"Scaleway" => DnsServerBootstrapType::Scaleway,
+            b"TencentCloud" => DnsServerBootstrapType::TencentCloud,
+            b"Transip" => DnsServerBootstrapType::Transip,
+            b"UltraDns" => DnsServerBootstrapType::UltraDns,
+            b"Vercel" => DnsServerBootstrapType::Vercel,
+            b"Volcengine" => DnsServerBootstrapType::Volcengine,
+            b"Vultr" => DnsServerBootstrapType::Vultr,
+            b"WebSupport" => DnsServerBootstrapType::WebSupport,
+            b"YandexCloud" => DnsServerBootstrapType::YandexCloud,
         }
+        .copied()
     }
 
     fn as_str(&self) -> &'static str {
         match self {
             DnsServerBootstrapType::Manual => "Manual",
             DnsServerBootstrapType::Tsig => "Tsig",
-            DnsServerBootstrapType::Sig0 => "Sig0",
+            DnsServerBootstrapType::Deprecated1 => "Deprecated1",
             DnsServerBootstrapType::Cloudflare => "Cloudflare",
             DnsServerBootstrapType::DigitalOcean => "DigitalOcean",
             DnsServerBootstrapType::DeSEC => "DeSEC",
@@ -2809,6 +2925,64 @@ impl EnumImpl for DnsServerBootstrapType {
             DnsServerBootstrapType::Spaceship => "Spaceship",
             DnsServerBootstrapType::Route53 => "Route53",
             DnsServerBootstrapType::GoogleCloudDns => "GoogleCloudDns",
+            DnsServerBootstrapType::Alidns => "Alidns",
+            DnsServerBootstrapType::ArvanCloud => "ArvanCloud",
+            DnsServerBootstrapType::Autodns => "Autodns",
+            DnsServerBootstrapType::AzureDns => "AzureDns",
+            DnsServerBootstrapType::BaiduCloud => "BaiduCloud",
+            DnsServerBootstrapType::BluecatV2 => "BluecatV2",
+            DnsServerBootstrapType::ClouDns => "ClouDns",
+            DnsServerBootstrapType::Constellix => "Constellix",
+            DnsServerBootstrapType::Cpanel => "Cpanel",
+            DnsServerBootstrapType::Ddnss => "Ddnss",
+            DnsServerBootstrapType::DnsMadeEasy => "DnsMadeEasy",
+            DnsServerBootstrapType::Domeneshop => "Domeneshop",
+            DnsServerBootstrapType::Dreamhost => "Dreamhost",
+            DnsServerBootstrapType::DuckDns => "DuckDns",
+            DnsServerBootstrapType::Dynu => "Dynu",
+            DnsServerBootstrapType::EasyDns => "EasyDns",
+            DnsServerBootstrapType::EdgeDns => "EdgeDns",
+            DnsServerBootstrapType::Exoscale => "Exoscale",
+            DnsServerBootstrapType::FreeMyIp => "FreeMyIp",
+            DnsServerBootstrapType::GandiV5 => "GandiV5",
+            DnsServerBootstrapType::Gcore => "Gcore",
+            DnsServerBootstrapType::Glesys => "Glesys",
+            DnsServerBootstrapType::Godaddy => "Godaddy",
+            DnsServerBootstrapType::Hetzner => "Hetzner",
+            DnsServerBootstrapType::HostingDe => "HostingDe",
+            DnsServerBootstrapType::Hostinger => "Hostinger",
+            DnsServerBootstrapType::HuaweiCloud => "HuaweiCloud",
+            DnsServerBootstrapType::Hurricane => "Hurricane",
+            DnsServerBootstrapType::IbmCloud => "IbmCloud",
+            DnsServerBootstrapType::Infoblox => "Infoblox",
+            DnsServerBootstrapType::Infomaniak => "Infomaniak",
+            DnsServerBootstrapType::Inwx => "Inwx",
+            DnsServerBootstrapType::Ionos => "Ionos",
+            DnsServerBootstrapType::Ipv64 => "Ipv64",
+            DnsServerBootstrapType::Joker => "Joker",
+            DnsServerBootstrapType::Lightsail => "Lightsail",
+            DnsServerBootstrapType::Linode => "Linode",
+            DnsServerBootstrapType::LuaDns => "LuaDns",
+            DnsServerBootstrapType::MythicBeasts => "MythicBeasts",
+            DnsServerBootstrapType::Namecheap => "Namecheap",
+            DnsServerBootstrapType::NameDotCom => "NameDotCom",
+            DnsServerBootstrapType::NameSilo => "NameSilo",
+            DnsServerBootstrapType::Netcup => "Netcup",
+            DnsServerBootstrapType::Netlify => "Netlify",
+            DnsServerBootstrapType::Nifcloud => "Nifcloud",
+            DnsServerBootstrapType::Ns1 => "Ns1",
+            DnsServerBootstrapType::OracleCloud => "OracleCloud",
+            DnsServerBootstrapType::Plesk => "Plesk",
+            DnsServerBootstrapType::Safedns => "Safedns",
+            DnsServerBootstrapType::Scaleway => "Scaleway",
+            DnsServerBootstrapType::TencentCloud => "TencentCloud",
+            DnsServerBootstrapType::Transip => "Transip",
+            DnsServerBootstrapType::UltraDns => "UltraDns",
+            DnsServerBootstrapType::Vercel => "Vercel",
+            DnsServerBootstrapType::Volcengine => "Volcengine",
+            DnsServerBootstrapType::Vultr => "Vultr",
+            DnsServerBootstrapType::WebSupport => "WebSupport",
+            DnsServerBootstrapType::YandexCloud => "YandexCloud",
         }
     }
 
@@ -2820,7 +2994,7 @@ impl EnumImpl for DnsServerBootstrapType {
         match id {
             0 => Some(DnsServerBootstrapType::Manual),
             1 => Some(DnsServerBootstrapType::Tsig),
-            2 => Some(DnsServerBootstrapType::Sig0),
+            2 => Some(DnsServerBootstrapType::Deprecated1),
             3 => Some(DnsServerBootstrapType::Cloudflare),
             4 => Some(DnsServerBootstrapType::DigitalOcean),
             5 => Some(DnsServerBootstrapType::DeSEC),
@@ -2831,11 +3005,69 @@ impl EnumImpl for DnsServerBootstrapType {
             10 => Some(DnsServerBootstrapType::Spaceship),
             11 => Some(DnsServerBootstrapType::Route53),
             12 => Some(DnsServerBootstrapType::GoogleCloudDns),
+            13 => Some(DnsServerBootstrapType::Alidns),
+            14 => Some(DnsServerBootstrapType::ArvanCloud),
+            15 => Some(DnsServerBootstrapType::Autodns),
+            16 => Some(DnsServerBootstrapType::AzureDns),
+            17 => Some(DnsServerBootstrapType::BaiduCloud),
+            18 => Some(DnsServerBootstrapType::BluecatV2),
+            19 => Some(DnsServerBootstrapType::ClouDns),
+            20 => Some(DnsServerBootstrapType::Constellix),
+            21 => Some(DnsServerBootstrapType::Cpanel),
+            22 => Some(DnsServerBootstrapType::Ddnss),
+            23 => Some(DnsServerBootstrapType::DnsMadeEasy),
+            24 => Some(DnsServerBootstrapType::Domeneshop),
+            25 => Some(DnsServerBootstrapType::Dreamhost),
+            26 => Some(DnsServerBootstrapType::DuckDns),
+            27 => Some(DnsServerBootstrapType::Dynu),
+            28 => Some(DnsServerBootstrapType::EasyDns),
+            29 => Some(DnsServerBootstrapType::EdgeDns),
+            30 => Some(DnsServerBootstrapType::Exoscale),
+            31 => Some(DnsServerBootstrapType::FreeMyIp),
+            32 => Some(DnsServerBootstrapType::GandiV5),
+            33 => Some(DnsServerBootstrapType::Gcore),
+            34 => Some(DnsServerBootstrapType::Glesys),
+            35 => Some(DnsServerBootstrapType::Godaddy),
+            36 => Some(DnsServerBootstrapType::Hetzner),
+            37 => Some(DnsServerBootstrapType::HostingDe),
+            38 => Some(DnsServerBootstrapType::Hostinger),
+            39 => Some(DnsServerBootstrapType::HuaweiCloud),
+            40 => Some(DnsServerBootstrapType::Hurricane),
+            41 => Some(DnsServerBootstrapType::IbmCloud),
+            42 => Some(DnsServerBootstrapType::Infoblox),
+            43 => Some(DnsServerBootstrapType::Infomaniak),
+            44 => Some(DnsServerBootstrapType::Inwx),
+            45 => Some(DnsServerBootstrapType::Ionos),
+            46 => Some(DnsServerBootstrapType::Ipv64),
+            47 => Some(DnsServerBootstrapType::Joker),
+            48 => Some(DnsServerBootstrapType::Lightsail),
+            49 => Some(DnsServerBootstrapType::Linode),
+            50 => Some(DnsServerBootstrapType::LuaDns),
+            51 => Some(DnsServerBootstrapType::MythicBeasts),
+            52 => Some(DnsServerBootstrapType::Namecheap),
+            53 => Some(DnsServerBootstrapType::NameDotCom),
+            54 => Some(DnsServerBootstrapType::NameSilo),
+            55 => Some(DnsServerBootstrapType::Netcup),
+            56 => Some(DnsServerBootstrapType::Netlify),
+            57 => Some(DnsServerBootstrapType::Nifcloud),
+            58 => Some(DnsServerBootstrapType::Ns1),
+            59 => Some(DnsServerBootstrapType::OracleCloud),
+            60 => Some(DnsServerBootstrapType::Plesk),
+            61 => Some(DnsServerBootstrapType::Safedns),
+            62 => Some(DnsServerBootstrapType::Scaleway),
+            63 => Some(DnsServerBootstrapType::TencentCloud),
+            64 => Some(DnsServerBootstrapType::Transip),
+            65 => Some(DnsServerBootstrapType::UltraDns),
+            66 => Some(DnsServerBootstrapType::Vercel),
+            67 => Some(DnsServerBootstrapType::Volcengine),
+            68 => Some(DnsServerBootstrapType::Vultr),
+            69 => Some(DnsServerBootstrapType::WebSupport),
+            70 => Some(DnsServerBootstrapType::YandexCloud),
             _ => None,
         }
     }
 
-    const COUNT: usize = 13;
+    const COUNT: usize = 71;
 }
 
 impl serde::Serialize for DnsServerBootstrapType {
@@ -2859,10 +3091,11 @@ impl<'de> serde::Deserialize<'de> for DnsServerBootstrapType {
 
 impl EnumImpl for DnsServerType {
     fn parse(value: &str) -> Option<Self> {
-        hashify::tiny_map! {
+        hashify::map! {
             value.as_bytes(),
+            DnsServerType,
             b"Tsig" => DnsServerType::Tsig,
-            b"Sig0" => DnsServerType::Sig0,
+            b"Deprecated1" => DnsServerType::Deprecated1,
             b"Cloudflare" => DnsServerType::Cloudflare,
             b"DigitalOcean" => DnsServerType::DigitalOcean,
             b"DeSEC" => DnsServerType::DeSEC,
@@ -2873,13 +3106,72 @@ impl EnumImpl for DnsServerType {
             b"Spaceship" => DnsServerType::Spaceship,
             b"Route53" => DnsServerType::Route53,
             b"GoogleCloudDns" => DnsServerType::GoogleCloudDns,
+            b"Alidns" => DnsServerType::Alidns,
+            b"ArvanCloud" => DnsServerType::ArvanCloud,
+            b"Autodns" => DnsServerType::Autodns,
+            b"AzureDns" => DnsServerType::AzureDns,
+            b"BaiduCloud" => DnsServerType::BaiduCloud,
+            b"BluecatV2" => DnsServerType::BluecatV2,
+            b"ClouDns" => DnsServerType::ClouDns,
+            b"Constellix" => DnsServerType::Constellix,
+            b"Cpanel" => DnsServerType::Cpanel,
+            b"Ddnss" => DnsServerType::Ddnss,
+            b"DnsMadeEasy" => DnsServerType::DnsMadeEasy,
+            b"Domeneshop" => DnsServerType::Domeneshop,
+            b"Dreamhost" => DnsServerType::Dreamhost,
+            b"DuckDns" => DnsServerType::DuckDns,
+            b"Dynu" => DnsServerType::Dynu,
+            b"EasyDns" => DnsServerType::EasyDns,
+            b"EdgeDns" => DnsServerType::EdgeDns,
+            b"Exoscale" => DnsServerType::Exoscale,
+            b"FreeMyIp" => DnsServerType::FreeMyIp,
+            b"GandiV5" => DnsServerType::GandiV5,
+            b"Gcore" => DnsServerType::Gcore,
+            b"Glesys" => DnsServerType::Glesys,
+            b"Godaddy" => DnsServerType::Godaddy,
+            b"Hetzner" => DnsServerType::Hetzner,
+            b"HostingDe" => DnsServerType::HostingDe,
+            b"Hostinger" => DnsServerType::Hostinger,
+            b"HuaweiCloud" => DnsServerType::HuaweiCloud,
+            b"Hurricane" => DnsServerType::Hurricane,
+            b"IbmCloud" => DnsServerType::IbmCloud,
+            b"Infoblox" => DnsServerType::Infoblox,
+            b"Infomaniak" => DnsServerType::Infomaniak,
+            b"Inwx" => DnsServerType::Inwx,
+            b"Ionos" => DnsServerType::Ionos,
+            b"Ipv64" => DnsServerType::Ipv64,
+            b"Joker" => DnsServerType::Joker,
+            b"Lightsail" => DnsServerType::Lightsail,
+            b"Linode" => DnsServerType::Linode,
+            b"LuaDns" => DnsServerType::LuaDns,
+            b"MythicBeasts" => DnsServerType::MythicBeasts,
+            b"Namecheap" => DnsServerType::Namecheap,
+            b"NameDotCom" => DnsServerType::NameDotCom,
+            b"NameSilo" => DnsServerType::NameSilo,
+            b"Netcup" => DnsServerType::Netcup,
+            b"Netlify" => DnsServerType::Netlify,
+            b"Nifcloud" => DnsServerType::Nifcloud,
+            b"Ns1" => DnsServerType::Ns1,
+            b"OracleCloud" => DnsServerType::OracleCloud,
+            b"Plesk" => DnsServerType::Plesk,
+            b"Safedns" => DnsServerType::Safedns,
+            b"Scaleway" => DnsServerType::Scaleway,
+            b"TencentCloud" => DnsServerType::TencentCloud,
+            b"Transip" => DnsServerType::Transip,
+            b"UltraDns" => DnsServerType::UltraDns,
+            b"Vercel" => DnsServerType::Vercel,
+            b"Volcengine" => DnsServerType::Volcengine,
+            b"Vultr" => DnsServerType::Vultr,
+            b"WebSupport" => DnsServerType::WebSupport,
+            b"YandexCloud" => DnsServerType::YandexCloud,
         }
+        .copied()
     }
 
     fn as_str(&self) -> &'static str {
         match self {
             DnsServerType::Tsig => "Tsig",
-            DnsServerType::Sig0 => "Sig0",
+            DnsServerType::Deprecated1 => "Deprecated1",
             DnsServerType::Cloudflare => "Cloudflare",
             DnsServerType::DigitalOcean => "DigitalOcean",
             DnsServerType::DeSEC => "DeSEC",
@@ -2890,6 +3182,64 @@ impl EnumImpl for DnsServerType {
             DnsServerType::Spaceship => "Spaceship",
             DnsServerType::Route53 => "Route53",
             DnsServerType::GoogleCloudDns => "GoogleCloudDns",
+            DnsServerType::Alidns => "Alidns",
+            DnsServerType::ArvanCloud => "ArvanCloud",
+            DnsServerType::Autodns => "Autodns",
+            DnsServerType::AzureDns => "AzureDns",
+            DnsServerType::BaiduCloud => "BaiduCloud",
+            DnsServerType::BluecatV2 => "BluecatV2",
+            DnsServerType::ClouDns => "ClouDns",
+            DnsServerType::Constellix => "Constellix",
+            DnsServerType::Cpanel => "Cpanel",
+            DnsServerType::Ddnss => "Ddnss",
+            DnsServerType::DnsMadeEasy => "DnsMadeEasy",
+            DnsServerType::Domeneshop => "Domeneshop",
+            DnsServerType::Dreamhost => "Dreamhost",
+            DnsServerType::DuckDns => "DuckDns",
+            DnsServerType::Dynu => "Dynu",
+            DnsServerType::EasyDns => "EasyDns",
+            DnsServerType::EdgeDns => "EdgeDns",
+            DnsServerType::Exoscale => "Exoscale",
+            DnsServerType::FreeMyIp => "FreeMyIp",
+            DnsServerType::GandiV5 => "GandiV5",
+            DnsServerType::Gcore => "Gcore",
+            DnsServerType::Glesys => "Glesys",
+            DnsServerType::Godaddy => "Godaddy",
+            DnsServerType::Hetzner => "Hetzner",
+            DnsServerType::HostingDe => "HostingDe",
+            DnsServerType::Hostinger => "Hostinger",
+            DnsServerType::HuaweiCloud => "HuaweiCloud",
+            DnsServerType::Hurricane => "Hurricane",
+            DnsServerType::IbmCloud => "IbmCloud",
+            DnsServerType::Infoblox => "Infoblox",
+            DnsServerType::Infomaniak => "Infomaniak",
+            DnsServerType::Inwx => "Inwx",
+            DnsServerType::Ionos => "Ionos",
+            DnsServerType::Ipv64 => "Ipv64",
+            DnsServerType::Joker => "Joker",
+            DnsServerType::Lightsail => "Lightsail",
+            DnsServerType::Linode => "Linode",
+            DnsServerType::LuaDns => "LuaDns",
+            DnsServerType::MythicBeasts => "MythicBeasts",
+            DnsServerType::Namecheap => "Namecheap",
+            DnsServerType::NameDotCom => "NameDotCom",
+            DnsServerType::NameSilo => "NameSilo",
+            DnsServerType::Netcup => "Netcup",
+            DnsServerType::Netlify => "Netlify",
+            DnsServerType::Nifcloud => "Nifcloud",
+            DnsServerType::Ns1 => "Ns1",
+            DnsServerType::OracleCloud => "OracleCloud",
+            DnsServerType::Plesk => "Plesk",
+            DnsServerType::Safedns => "Safedns",
+            DnsServerType::Scaleway => "Scaleway",
+            DnsServerType::TencentCloud => "TencentCloud",
+            DnsServerType::Transip => "Transip",
+            DnsServerType::UltraDns => "UltraDns",
+            DnsServerType::Vercel => "Vercel",
+            DnsServerType::Volcengine => "Volcengine",
+            DnsServerType::Vultr => "Vultr",
+            DnsServerType::WebSupport => "WebSupport",
+            DnsServerType::YandexCloud => "YandexCloud",
         }
     }
 
@@ -2900,7 +3250,7 @@ impl EnumImpl for DnsServerType {
     fn from_id(id: u16) -> Option<Self> {
         match id {
             0 => Some(DnsServerType::Tsig),
-            1 => Some(DnsServerType::Sig0),
+            1 => Some(DnsServerType::Deprecated1),
             2 => Some(DnsServerType::Cloudflare),
             3 => Some(DnsServerType::DigitalOcean),
             4 => Some(DnsServerType::DeSEC),
@@ -2911,11 +3261,69 @@ impl EnumImpl for DnsServerType {
             9 => Some(DnsServerType::Spaceship),
             10 => Some(DnsServerType::Route53),
             11 => Some(DnsServerType::GoogleCloudDns),
+            12 => Some(DnsServerType::Alidns),
+            13 => Some(DnsServerType::ArvanCloud),
+            14 => Some(DnsServerType::Autodns),
+            15 => Some(DnsServerType::AzureDns),
+            16 => Some(DnsServerType::BaiduCloud),
+            17 => Some(DnsServerType::BluecatV2),
+            18 => Some(DnsServerType::ClouDns),
+            19 => Some(DnsServerType::Constellix),
+            20 => Some(DnsServerType::Cpanel),
+            21 => Some(DnsServerType::Ddnss),
+            22 => Some(DnsServerType::DnsMadeEasy),
+            23 => Some(DnsServerType::Domeneshop),
+            24 => Some(DnsServerType::Dreamhost),
+            25 => Some(DnsServerType::DuckDns),
+            26 => Some(DnsServerType::Dynu),
+            27 => Some(DnsServerType::EasyDns),
+            28 => Some(DnsServerType::EdgeDns),
+            29 => Some(DnsServerType::Exoscale),
+            30 => Some(DnsServerType::FreeMyIp),
+            31 => Some(DnsServerType::GandiV5),
+            32 => Some(DnsServerType::Gcore),
+            33 => Some(DnsServerType::Glesys),
+            34 => Some(DnsServerType::Godaddy),
+            35 => Some(DnsServerType::Hetzner),
+            36 => Some(DnsServerType::HostingDe),
+            37 => Some(DnsServerType::Hostinger),
+            38 => Some(DnsServerType::HuaweiCloud),
+            39 => Some(DnsServerType::Hurricane),
+            40 => Some(DnsServerType::IbmCloud),
+            41 => Some(DnsServerType::Infoblox),
+            42 => Some(DnsServerType::Infomaniak),
+            43 => Some(DnsServerType::Inwx),
+            44 => Some(DnsServerType::Ionos),
+            45 => Some(DnsServerType::Ipv64),
+            46 => Some(DnsServerType::Joker),
+            47 => Some(DnsServerType::Lightsail),
+            48 => Some(DnsServerType::Linode),
+            49 => Some(DnsServerType::LuaDns),
+            50 => Some(DnsServerType::MythicBeasts),
+            51 => Some(DnsServerType::Namecheap),
+            52 => Some(DnsServerType::NameDotCom),
+            53 => Some(DnsServerType::NameSilo),
+            54 => Some(DnsServerType::Netcup),
+            55 => Some(DnsServerType::Netlify),
+            56 => Some(DnsServerType::Nifcloud),
+            57 => Some(DnsServerType::Ns1),
+            58 => Some(DnsServerType::OracleCloud),
+            59 => Some(DnsServerType::Plesk),
+            60 => Some(DnsServerType::Safedns),
+            61 => Some(DnsServerType::Scaleway),
+            62 => Some(DnsServerType::TencentCloud),
+            63 => Some(DnsServerType::Transip),
+            64 => Some(DnsServerType::UltraDns),
+            65 => Some(DnsServerType::Vercel),
+            66 => Some(DnsServerType::Volcengine),
+            67 => Some(DnsServerType::Vultr),
+            68 => Some(DnsServerType::WebSupport),
+            69 => Some(DnsServerType::YandexCloud),
             _ => None,
         }
     }
 
-    const COUNT: usize = 12;
+    const COUNT: usize = 70;
 }
 
 impl serde::Serialize for DnsServerType {
@@ -2944,6 +3352,8 @@ impl EnumImpl for EncryptionAtRestType {
             b"Disabled" => EncryptionAtRestType::Disabled,
             b"Aes128" => EncryptionAtRestType::Aes128,
             b"Aes256" => EncryptionAtRestType::Aes256,
+            b"Aes256Gcm" => EncryptionAtRestType::Aes256Gcm,
+            b"ChaCha20Poly1305" => EncryptionAtRestType::ChaCha20Poly1305,
         }
     }
 
@@ -2952,6 +3362,8 @@ impl EnumImpl for EncryptionAtRestType {
             EncryptionAtRestType::Disabled => "Disabled",
             EncryptionAtRestType::Aes128 => "Aes128",
             EncryptionAtRestType::Aes256 => "Aes256",
+            EncryptionAtRestType::Aes256Gcm => "Aes256Gcm",
+            EncryptionAtRestType::ChaCha20Poly1305 => "ChaCha20Poly1305",
         }
     }
 
@@ -2964,11 +3376,13 @@ impl EnumImpl for EncryptionAtRestType {
             0 => Some(EncryptionAtRestType::Disabled),
             1 => Some(EncryptionAtRestType::Aes128),
             2 => Some(EncryptionAtRestType::Aes256),
+            3 => Some(EncryptionAtRestType::Aes256Gcm),
+            4 => Some(EncryptionAtRestType::ChaCha20Poly1305),
             _ => None,
         }
     }
 
-    const COUNT: usize = 3;
+    const COUNT: usize = 5;
 }
 
 impl serde::Serialize for EncryptionAtRestType {
@@ -3625,6 +4039,7 @@ impl EnumImpl for InMemoryStoreBaseType {
             value.as_bytes(),
             b"Redis" => InMemoryStoreBaseType::Redis,
             b"RedisCluster" => InMemoryStoreBaseType::RedisCluster,
+            b"RedisSentinel" => InMemoryStoreBaseType::RedisSentinel,
         }
     }
 
@@ -3632,6 +4047,7 @@ impl EnumImpl for InMemoryStoreBaseType {
         match self {
             InMemoryStoreBaseType::Redis => "Redis",
             InMemoryStoreBaseType::RedisCluster => "RedisCluster",
+            InMemoryStoreBaseType::RedisSentinel => "RedisSentinel",
         }
     }
 
@@ -3643,11 +4059,12 @@ impl EnumImpl for InMemoryStoreBaseType {
         match id {
             0 => Some(InMemoryStoreBaseType::Redis),
             1 => Some(InMemoryStoreBaseType::RedisCluster),
+            2 => Some(InMemoryStoreBaseType::RedisSentinel),
             _ => None,
         }
     }
 
-    const COUNT: usize = 2;
+    const COUNT: usize = 3;
 }
 
 impl serde::Serialize for InMemoryStoreBaseType {
@@ -3677,6 +4094,7 @@ impl EnumImpl for InMemoryStoreType {
             b"Sharded" => InMemoryStoreType::Sharded,
             b"Redis" => InMemoryStoreType::Redis,
             b"RedisCluster" => InMemoryStoreType::RedisCluster,
+            b"RedisSentinel" => InMemoryStoreType::RedisSentinel,
         }
     }
 
@@ -3686,6 +4104,7 @@ impl EnumImpl for InMemoryStoreType {
             InMemoryStoreType::Sharded => "Sharded",
             InMemoryStoreType::Redis => "Redis",
             InMemoryStoreType::RedisCluster => "RedisCluster",
+            InMemoryStoreType::RedisSentinel => "RedisSentinel",
         }
     }
 
@@ -3699,11 +4118,12 @@ impl EnumImpl for InMemoryStoreType {
             1 => Some(InMemoryStoreType::Sharded),
             2 => Some(InMemoryStoreType::Redis),
             3 => Some(InMemoryStoreType::RedisCluster),
+            4 => Some(InMemoryStoreType::RedisSentinel),
             _ => None,
         }
     }
 
-    const COUNT: usize = 4;
+    const COUNT: usize = 5;
 }
 
 impl serde::Serialize for InMemoryStoreType {
@@ -3822,6 +4242,56 @@ impl serde::Serialize for IpProtocol {
 }
 
 impl<'de> serde::Deserialize<'de> for IpProtocol {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = Cow::<str>::deserialize(deserializer)?;
+        Self::parse(&s).ok_or_else(|| serde::de::Error::unknown_variant(&s, &[]))
+    }
+}
+
+impl EnumImpl for JokerAuthType {
+    fn parse(value: &str) -> Option<Self> {
+        hashify::tiny_map! {
+            value.as_bytes(),
+            b"ApiKey" => JokerAuthType::ApiKey,
+            b"UsernamePassword" => JokerAuthType::UsernamePassword,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            JokerAuthType::ApiKey => "ApiKey",
+            JokerAuthType::UsernamePassword => "UsernamePassword",
+        }
+    }
+
+    fn to_id(&self) -> u16 {
+        *self as u16
+    }
+
+    fn from_id(id: u16) -> Option<Self> {
+        match id {
+            0 => Some(JokerAuthType::ApiKey),
+            1 => Some(JokerAuthType::UsernamePassword),
+            _ => None,
+        }
+    }
+
+    const COUNT: usize = 2;
+}
+
+impl serde::Serialize for JokerAuthType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for JokerAuthType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -5028,6 +5498,7 @@ impl EnumImpl for LookupStoreType {
             b"Sharded" => LookupStoreType::Sharded,
             b"Redis" => LookupStoreType::Redis,
             b"RedisCluster" => LookupStoreType::RedisCluster,
+            b"RedisSentinel" => LookupStoreType::RedisSentinel,
         }
     }
 
@@ -5039,6 +5510,7 @@ impl EnumImpl for LookupStoreType {
             LookupStoreType::Sharded => "Sharded",
             LookupStoreType::Redis => "Redis",
             LookupStoreType::RedisCluster => "RedisCluster",
+            LookupStoreType::RedisSentinel => "RedisSentinel",
         }
     }
 
@@ -5054,11 +5526,12 @@ impl EnumImpl for LookupStoreType {
             3 => Some(LookupStoreType::Sharded),
             4 => Some(LookupStoreType::Redis),
             5 => Some(LookupStoreType::RedisCluster),
+            6 => Some(LookupStoreType::RedisSentinel),
             _ => None,
         }
     }
 
-    const COUNT: usize = 6;
+    const COUNT: usize = 7;
 }
 
 impl serde::Serialize for LookupStoreType {
@@ -6392,6 +6865,7 @@ impl EnumImpl for Permission {
             b"jmapFileNodeCreate" => Permission::JmapFileNodeCreate,
             b"jmapFileNodeUpdate" => Permission::JmapFileNodeUpdate,
             b"jmapFileNodeDestroy" => Permission::JmapFileNodeDestroy,
+            b"jmapFileNodeCopy" => Permission::JmapFileNodeCopy,
             b"jmapShareNotificationGet" => Permission::JmapShareNotificationGet,
             b"jmapShareNotificationChanges" => Permission::JmapShareNotificationChanges,
             b"jmapShareNotificationQuery" => Permission::JmapShareNotificationQuery,
@@ -7057,6 +7531,7 @@ impl EnumImpl for Permission {
             Permission::JmapFileNodeCreate => "jmapFileNodeCreate",
             Permission::JmapFileNodeUpdate => "jmapFileNodeUpdate",
             Permission::JmapFileNodeDestroy => "jmapFileNodeDestroy",
+            Permission::JmapFileNodeCopy => "jmapFileNodeCopy",
             Permission::JmapShareNotificationGet => "jmapShareNotificationGet",
             Permission::JmapShareNotificationChanges => "jmapShareNotificationChanges",
             Permission::JmapShareNotificationQuery => "jmapShareNotificationQuery",
@@ -7735,6 +8210,7 @@ impl EnumImpl for Permission {
             92 => Some(Permission::JmapFileNodeCreate),
             93 => Some(Permission::JmapFileNodeUpdate),
             94 => Some(Permission::JmapFileNodeDestroy),
+            659 => Some(Permission::JmapFileNodeCopy),
             95 => Some(Permission::JmapShareNotificationGet),
             96 => Some(Permission::JmapShareNotificationChanges),
             97 => Some(Permission::JmapShareNotificationQuery),
@@ -8303,7 +8779,7 @@ impl EnumImpl for Permission {
         }
     }
 
-    const COUNT: usize = 659;
+    const COUNT: usize = 660;
 }
 
 impl serde::Serialize for Permission {

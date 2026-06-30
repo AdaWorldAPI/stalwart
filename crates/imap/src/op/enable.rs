@@ -45,6 +45,9 @@ impl<T: SessionStream> Session<T> {
                 Capability::Utf8Accept => {
                     self.is_utf8 = true;
                 }
+                Capability::ObjectIdPlus => {
+                    self.is_objectid = true;
+                }
                 _ => {
                     continue;
                 }

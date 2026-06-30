@@ -12,7 +12,7 @@ use crate::{
     },
     utils::{dns::DnsCache, server::TestServerBuilder},
 };
-use mail_auth::MX;
+use mail_auth::{DnssecStatus, MX};
 use registry::{
     schema::{
         enums::MtaOutboundThrottleKey,
@@ -239,6 +239,7 @@ async fn throttle_outbound() {
             exchanges: vec!["mx.test.org".into()].into_boxed_slice(),
             preference: 10,
         }],
+        DnssecStatus::Secure,
         Instant::now() + Duration::from_secs(10),
     );
     local.server.ipv4_add(
@@ -269,6 +270,7 @@ async fn throttle_outbound() {
             exchanges: vec!["mx.test.net".into()].into_boxed_slice(),
             preference: 10,
         }],
+        DnssecStatus::Secure,
         Instant::now() + Duration::from_secs(10),
     );
     local.server.ipv4_add(

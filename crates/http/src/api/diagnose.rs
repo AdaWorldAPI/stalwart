@@ -16,9 +16,12 @@ use mail_auth::{IpLookupStrategy, mta_sts::TlsRpt};
 use serde::{Deserialize, Serialize};
 use smtp::outbound::{
     client::{SmtpClient, StartTlsResult},
-    dane::{dnssec::TlsaLookup, verify::TlsaVerify},
+    dane::{
+        dnssec::{TlsaLookup, TlsaResult},
+        verify::TlsaVerify,
+    },
     error::ClientError,
-    lookup::{DnsLookup, ToNextHop},
+    lookup::{DnsLookup, SourceIp, ToNextHop},
     mta_sts::{lookup::MtaStsLookup, verify::VerifyPolicy},
 };
 use std::{
@@ -218,6 +221,7 @@ async fn delivery_diagnose(
     };
 
     let local_host = &server.core.network.server_name;
+    let conn_strategy = server.get_connection_or_default("default", 0);
 
     tx.send(DeliveryStage::MxLookupStart {
         domain: domain.to_string(),
@@ -248,13 +252,14 @@ async fn delivery_diagnose(
 
     // Obtain remote host list
     let mx_config = MxConfig {
-        max_mx: mxs.len(),
+        max_mx: mxs.rrset.len(),
         max_multi_homed: 10,
         ip_lookup_strategy: IpLookupStrategy::Ipv4thenIpv6,
     };
     let hosts = if let Some(hosts) = mxs.to_remote_hosts(&domain, &mx_config) {
         tx.send(DeliveryStage::MxLookupSuccess {
             mxs: mxs
+                .rrset
                 .iter()
                 .map(|mx| MX {
                     exchanges: mx.exchanges.iter().map(|e| e.to_string()).collect(),
@@ -384,7 +389,7 @@ async fn delivery_diagnose(
 
         let now = Instant::now();
         let dane_policy = match server.tlsa_lookup(format!("_25._tcp.{hostname}.")).await {
-            Ok(Some(tlsa)) if tlsa.has_end_entities => {
+            Ok(TlsaResult::Secure(tlsa)) if tlsa.has_end_entities => {
                 tx.send(DeliveryStage::TlsaLookupSuccess {
                     record: tlsa.as_ref().clone(),
                     elapsed: now.elapsed_ms(),
@@ -393,7 +398,7 @@ async fn delivery_diagnose(
 
                 Some(tlsa)
             }
-            Ok(Some(_)) => {
+            Ok(TlsaResult::Secure(_)) => {
                 tx.send(DeliveryStage::TlsaLookupError {
                     elapsed: now.elapsed_ms(),
                     reason: "TLSA record does not have end entities".to_string(),
@@ -402,7 +407,16 @@ async fn delivery_diagnose(
 
                 None
             }
-            Ok(None) => {
+            Ok(TlsaResult::Bogus) => {
+                tx.send(DeliveryStage::TlsaLookupError {
+                    elapsed: now.elapsed_ms(),
+                    reason: "Bogus TLSA record".to_string(),
+                })
+                .await?;
+
+                None
+            }
+            Ok(TlsaResult::Missing) => {
                 tx.send(DeliveryStage::TlsaNotFound {
                     elapsed: now.elapsed_ms(),
                     reason: "No TLSA DNSSEC records found".to_string(),
@@ -472,7 +486,13 @@ async fn delivery_diagnose(
                 .await?;
 
             let now = Instant::now();
-            match SmtpClient::connect(SocketAddr::new(remote_ip, 25), timeout, 0).await {
+            let connect = if let Some(ip_host) = conn_strategy.source_ip(remote_ip.is_ipv4()) {
+                SmtpClient::connect_using(ip_host.ip, SocketAddr::new(remote_ip, 25), timeout, 0)
+                    .await
+            } else {
+                SmtpClient::connect(SocketAddr::new(remote_ip, 25), timeout, 0).await
+            };
+            match connect {
                 Ok(mut client) => {
                     tx.send(DeliveryStage::ConnectionSuccess {
                         elapsed: now.elapsed_ms(),
@@ -586,6 +606,7 @@ async fn delivery_diagnose(
                         if let Err(err) = dane_policy.verify(
                             0,
                             hostname,
+                            &[hostname],
                             client.tls_connection().peer_certificates(),
                         ) {
                             tx.send(DeliveryStage::DaneVerifyError {

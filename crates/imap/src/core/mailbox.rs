@@ -384,6 +384,21 @@ impl<T: SessionStream> SessionData<T> {
         None
     }
 
+    pub fn get_mailbox_by_id(&self, account_id: u32, mailbox_id: u32) -> Option<MailboxId> {
+        for account in self.mailboxes.lock().iter() {
+            if account.account_id == account_id
+                && account.mailbox_names.values().any(|id| *id == mailbox_id)
+            {
+                return MailboxId {
+                    account_id,
+                    mailbox_id,
+                }
+                .into();
+            }
+        }
+        None
+    }
+
     pub async fn check_mailbox_acl(
         &self,
         account_id: u32,

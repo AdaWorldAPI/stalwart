@@ -5,7 +5,7 @@
  */
 
 use super::{
-    FdbStore, MAX_VALUE_SIZE, ReadVersion, into_error,
+    FdbStore, MAX_VALUE_SIZE, into_error,
     read::{ChunkedValue, read_chunked_value},
 };
 use crate::{
@@ -102,6 +102,7 @@ impl FdbStore {
                                 let (merge_result, is_chunked) =
                                     match read_chunked_value(&key, &trx, false)
                                         .await
+                                        .map_err(into_error)
                                         .caused_by(trc::location!())?
                                     {
                                         ChunkedValue::Single(slice) => (
@@ -270,10 +271,7 @@ impl FdbStore {
         match trx.commit().await {
             Ok(result) => {
                 let commit_version = result.committed_version().map_err(into_error)?;
-                let mut version = self.version.lock();
-                if commit_version > version.version {
-                    *version = ReadVersion::new(commit_version);
-                }
+                self.version.raise_floor(commit_version);
                 Ok(true)
             }
             Err(err) => {

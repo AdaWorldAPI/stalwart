@@ -65,12 +65,13 @@ impl RegistryGet for Server {
             (object_flags & OBJ_FILTER_TENANT) != 0 && access_token.tenant_id().is_some();
         let is_account_filtered = (object_flags & OBJ_FILTER_ACCOUNT) != 0
             && !access_token.has_permission(Permission::Impersonate);
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let mut get = RegistryGetResponse {
             access_token,
             server: self,
             account_id: request.account_id.document_id(),
             object_type,
-            ids: request.unwrap_ids(self.core.jmap.get_max_objects)?,
+            ids,
             properties: request
                 .properties
                 .take()
@@ -83,7 +84,7 @@ impl RegistryGet for Server {
                 account_id: request.account_id.into(),
                 state: None,
                 list: vec![],
-                not_found: vec![],
+                not_found: not_found_ids,
             },
             object_flags,
             is_tenant_filtered,
@@ -233,7 +234,7 @@ impl RegistryGet for Server {
                         continue;
                     };
 
-                    let mut extra_properties = VecMap::new();
+                    let mut extra_properties: VecMap<Property, _> = VecMap::new();
                     match &object.inner {
                         ObjectInner::DkimSignature(obj)
                             if get.properties.is_empty()
@@ -384,11 +385,13 @@ impl RegistryGetResponse<'_> {
     }
 
     pub fn not_found(&mut self, id: Id) {
-        self.response.not_found.push(id);
+        self.response.push_not_found(id);
     }
 
     pub fn not_found_any(mut self) -> Self {
-        self.response.not_found = self.ids.take().unwrap_or_default();
+        for id in self.ids.take().unwrap_or_default() {
+            self.response.push_not_found(id);
+        }
         self
     }
 

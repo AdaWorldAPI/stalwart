@@ -60,7 +60,18 @@ impl SessionHandler for Server {
         // Add secondary accounts
         for &account_id in access_token.secondary_ids() {
             let is_owner = access_token.is_member(account_id);
-            let account = self.account(account_id).await.caused_by(trc::location!())?;
+            let Some(account) = self
+                .try_account(account_id)
+                .await
+                .caused_by(trc::location!())?
+            else {
+                trc::event!(
+                    Auth(trc::AuthEvent::Warning),
+                    AccountId = account_id,
+                    Reason = "Skipping orphan secondary account id in session",
+                );
+                continue;
+            };
 
             let account_id = Id::from(account_id);
             let mut account = Account {

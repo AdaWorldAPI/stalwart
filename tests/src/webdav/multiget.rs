@@ -21,7 +21,11 @@ pub async fn test(test: &TestServer) {
         let mut paths = Vec::new();
         for name in ["file1", "file2"] {
             let contents = resource_type.generate();
-            let path = format!("{}/john%40example.com/default/{}", resource_type.base_path(), name);
+            let path = format!(
+                "{}/john%40example.com/default/{}",
+                resource_type.base_path(),
+                name
+            );
             let etag = client
                 .request("PUT", &path, contents.as_str())
                 .await
@@ -58,9 +62,10 @@ pub async fn test(test: &TestServer) {
                     .get(DavProperty::WebDav(WebDavProperty::GetETag))
                     .with_values([etag.as_str()]);
                 props
-                    .get(DavProperty::CardDav(CardDavProperty::AddressData(
-                        Default::default(),
-                    )))
+                    .get(DavProperty::CardDav(CardDavProperty::AddressData {
+                        properties: Default::default(),
+                        version: None,
+                    }))
                     .with_values([contents.as_str()]);
             }
         }

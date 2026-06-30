@@ -9,7 +9,7 @@ use crate::{
     utils::{dns::DnsCache, server::TestServerBuilder},
 };
 use ahash::{AHashMap, HashMap, HashSet};
-use mail_auth::MX;
+use mail_auth::{DnssecStatus, MX};
 use registry::{
     schema::{
         enums::NetworkListenerProtocol,
@@ -25,6 +25,7 @@ use registry::{
 };
 use serde_json::json;
 use std::time::{Duration, Instant};
+use types::id::Id;
 
 #[tokio::test]
 #[serial_test::serial]
@@ -86,7 +87,7 @@ async fn manage_queue() {
         .await;
     let queue_id = admin
         .registry_create_object(MtaVirtualQueue {
-            name: "default".into(),
+            name: "myqueue".into(),
             threads_per_node: 25,
             description: None,
         })
@@ -133,6 +134,7 @@ async fn manage_queue() {
             exchanges: vec!["mx1.foobar.org".into()].into_boxed_slice(),
             preference: 10,
         }],
+        DnssecStatus::Secure,
         Instant::now() + Duration::from_secs(10),
     );
 
@@ -332,6 +334,110 @@ async fn manage_queue() {
             HashSet::from_iter(ids.iter().map(|id| id_map_rev.get(id).unwrap().as_str())),
             HashSet::from_iter(expected_ids.into_iter()),
             "failed for query {query:?}"
+        );
+    }
+
+    // Test pagination (forward and reverse)
+    let asc_order: Vec<Id> = admin
+        .registry_query_paginated(
+            ObjectType::QueuedMessage,
+            "due",
+            true,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .object_ids()
+        .collect();
+    assert_eq!(asc_order.len(), 6, "expected 6 messages, got {asc_order:?}");
+    let desc_order: Vec<Id> = asc_order.iter().rev().copied().collect();
+
+    for chunk_start in [0usize, 2, 4] {
+        let asc = admin
+            .registry_query_paginated(
+                ObjectType::QueuedMessage,
+                "due",
+                true,
+                Some(chunk_start as i32),
+                Some(2),
+                None,
+                None,
+                false,
+            )
+            .await
+            .object_ids()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            asc,
+            asc_order[chunk_start..chunk_start + 2],
+            "ascending position={chunk_start} limit=2",
+        );
+
+        let desc = admin
+            .registry_query_paginated(
+                ObjectType::QueuedMessage,
+                "due",
+                false,
+                Some(chunk_start as i32),
+                Some(2),
+                None,
+                None,
+                false,
+            )
+            .await
+            .object_ids()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            desc,
+            desc_order[chunk_start..chunk_start + 2],
+            "descending position={chunk_start} limit=2",
+        );
+    }
+
+    for anchor_idx in [1usize, 3] {
+        let asc = admin
+            .registry_query_paginated(
+                ObjectType::QueuedMessage,
+                "due",
+                true,
+                None,
+                Some(2),
+                Some(asc_order[anchor_idx]),
+                Some(1),
+                false,
+            )
+            .await
+            .object_ids()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            asc,
+            asc_order[anchor_idx + 1..anchor_idx + 3],
+            "ascending anchor={} offset=1 limit=2",
+            asc_order[anchor_idx],
+        );
+
+        let desc = admin
+            .registry_query_paginated(
+                ObjectType::QueuedMessage,
+                "due",
+                false,
+                None,
+                Some(2),
+                Some(desc_order[anchor_idx]),
+                Some(1),
+                false,
+            )
+            .await
+            .object_ids()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            desc,
+            desc_order[anchor_idx + 1..anchor_idx + 3],
+            "descending anchor={} offset=1 limit=2",
+            desc_order[anchor_idx],
         );
     }
 

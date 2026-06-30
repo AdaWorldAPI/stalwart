@@ -217,6 +217,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "CalendarEvent/get",
             {
+                "accountId": account.id_string(),
                 "properties": ["id", "title", "recurrenceOverrides", "participants"],
                 "ids": [&event_2_id, &event_3_id],
                 "recurrenceOverridesBefore": "2006-01-07T00:00:00Z",
@@ -577,6 +578,7 @@ pub async fn test(test: &TestServer) {
          [
           "Blob/upload",
           {
+           "accountId": account.id_string(),
            "create": {
             "ical": {
              "data": [
@@ -609,6 +611,7 @@ END:VCALENDAR
         [
           "CalendarEvent/parse",
           {
+           "accountId": account.id_string(),
            "blobIds": [
              "#ical"
            ]

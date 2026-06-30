@@ -25,7 +25,7 @@ use jmap_proto::{
     method::set::{SetRequest, SetResponse},
     object::mailbox::{self, MailboxProperty, MailboxValue},
     references::resolve::ResolveCreatedReference,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::state::State,
 };
 use jmap_tools::{JsonPointerItem, Key, Map, Value};
@@ -80,14 +80,16 @@ impl MailboxSet for Server {
         let account_id = request.account_id.document_id();
         let on_destroy_remove_emails = request.arguments.on_destroy_remove_emails.unwrap_or(false);
         let cache = self.get_cached_messages(account_id).await?;
+        let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?
+            .with_state(cache.assert_state(true, &request.if_in_state)?);
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
         let mut ctx = SetContext {
             account_id,
             is_shared: access_token.is_shared(account_id),
             access_token,
-            response: SetResponse::from_request(&request, self.core.jmap.set_max_objects)?
-                .with_state(cache.assert_state(true, &request.if_in_state)?),
+            response,
             mailbox_ids: RoaringBitmap::from_iter(cache.mailboxes.index.keys()),
-            will_destroy: request.unwrap_destroy().into_valid().collect(),
+            will_destroy,
         };
         let mut change_id = None;
         let account_info = self.account(account_id).await?;
@@ -161,7 +163,16 @@ impl MailboxSet for Server {
         // Process updates
         let mut will_update = Vec::with_capacity(request.update.as_ref().map_or(0, |u| u.len()));
         let mut batch = BatchBuilder::new();
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    ctx.response
+                        .not_updated
+                        .append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if ctx.will_destroy.contains(&id) {
                 ctx.response
@@ -435,6 +446,17 @@ impl MailboxSet for Server {
                     }
                 }
 
+                (Key::Property(MailboxProperty::Id), value) => {
+                    if update
+                        .as_ref()
+                        .map(|(document_id, _)| Id::from(*document_id))
+                        .is_none_or(|expected| !crate::matches_id(&value, expected))
+                    {
+                        return Ok(Err(SetError::invalid_properties()
+                            .with_property(MailboxProperty::Id)
+                            .with_description("The id property is immutable.".to_string())));
+                    }
+                }
                 _ => {
                     return Ok(Err(SetError::invalid_properties()
                         .with_property(property.into_owned())
@@ -550,13 +572,13 @@ impl MailboxSet for Server {
             if update
                 .as_ref()
                 .is_none_or(|(_, m)| m.inner.name != changes.name)
-                && cached_mailboxes.mailboxes.items.iter().any(|m| {
+                && let Some(existing) = cached_mailboxes.mailboxes.items.iter().find(|m| {
                     m.name.to_lowercase() == lower_name
                         && m.parent_id().map_or(0, |id| id + 1) == changes.parent_id
                 })
             {
-                return Ok(Err(SetError::invalid_properties()
-                    .with_property(MailboxProperty::Name)
+                return Ok(Err(SetError::already_exists()
+                    .with_existing_id(Id::from(existing.document_id))
                     .with_description(format!(
                         "A mailbox with name '{}' already exists.",
                         changes.name

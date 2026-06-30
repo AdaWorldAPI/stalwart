@@ -14,8 +14,11 @@ use self::{
     auth::MailAuthConfig, queue::QueueConfig, report::ReportConfig, resolver::Resolvers,
     session::SessionConfig,
 };
-use crate::expr::Expression;
-use registry::{schema::structs::Rate, types::id::ObjectId};
+use crate::{config::smtp::queue::RequireOptional, expr::Expression};
+use registry::{
+    schema::{properties::ObjectType, structs::Rate},
+    types::id::ObjectId,
+};
 use store::registry::bootstrap::Bootstrap;
 
 #[derive(Clone)]
@@ -49,12 +52,32 @@ pub const THROTTLE_HELO_DOMAIN: u16 = 1 << 9;
 
 impl SmtpConfig {
     pub async fn parse(bp: &mut Bootstrap) -> Self {
-        Self {
+        let config = Self {
             session: SessionConfig::parse(bp).await,
             queue: QueueConfig::parse(bp).await,
             resolvers: Resolvers::parse(bp).await,
             mail_auth: MailAuthConfig::parse(bp).await,
             report: ReportConfig::parse(bp).await,
+        };
+
+        if !config.resolvers.dnssec_available
+            && (config.queue.tls_strategy.is_empty()
+                || config
+                    .queue
+                    .tls_strategy
+                    .values()
+                    .any(|t| !matches!(t.dane, RequireOptional::Disable)))
+        {
+            bp.build_warning(
+                ObjectType::DnsResolver.singleton(),
+                concat!(
+                    "The configured DNS resolver cannot validate DNSSEC. ",
+                    "DANE has been disabled to avoid deferring mail. ",
+                    "Configure a DNSSEC-validating resolver to enable DANE."
+                ),
+            );
         }
+
+        config
     }
 }

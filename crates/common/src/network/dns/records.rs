@@ -78,7 +78,7 @@ impl Server {
                         .collect::<AHashSet<_>>();
 
                     for mx in mxs {
-                        if mx.ends_with(&domain_name_suffix) || mx == domain_name {
+                        if mx.ends_with(&domain_name_suffix) {
                             records.push(NamedDnsRecord {
                                 name: format!("{mx}."),
                                 record: DnsRecord::TXT("v=spf1 a -all".to_string()),
@@ -133,7 +133,7 @@ impl Server {
                     }
                 }
                 DnsRecordType::AutoConfig => {
-                    let pacc_digest = Sha256::digest(&self.get_pacc_for_fomain(domain_name).await?);
+                    let pacc_digest = Sha256::digest(&self.get_pacc_for_domain(domain_name).await?);
                     let pacc_digest_encoded = general_purpose::STANDARD.encode(pacc_digest);
 
                     records.push(NamedDnsRecord {
@@ -379,7 +379,7 @@ impl Server {
         .map(|records| BindSerializer::serialize(&records))
     }
 
-    pub async fn get_pacc_for_fomain(&self, domain_name: &str) -> trc::Result<String> {
+    pub async fn get_pacc_for_domain(&self, domain_name: &str) -> trc::Result<String> {
         self.get_directory_for_domain(domain_name)
             .await
             .caused_by(trc::location!())

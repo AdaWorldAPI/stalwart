@@ -238,15 +238,13 @@ impl RegistryStore {
 
     pub async fn refresh_node_id_lease(&self) -> trc::Result<()> {
         let mut batch = BatchBuilder::new();
-        batch
-            .assert_value(ValueClass::NodeId(self.0.node_id), ())
-            .set(
-                ValueClass::NodeId(self.0.node_id),
-                KeySerializer::new(self.0.env_hostname.len() + U64_LEN)
-                    .write(now())
-                    .write(&self.0.env_hostname)
-                    .finalize(),
-            );
+        batch.set(
+            ValueClass::NodeId(self.0.node_id),
+            KeySerializer::new(self.0.env_hostname.len() + U64_LEN)
+                .write(now())
+                .write(&self.0.env_hostname)
+                .finalize(),
+        );
         self.0
             .store
             .write(batch.build_all())
@@ -276,8 +274,8 @@ impl RegistryStore {
     }
 
     #[inline(always)]
-    pub fn https_port(&self) -> Option<u16> {
-        self.0.env_https_port
+    pub fn public_url(&self) -> Option<&str> {
+        self.0.env_public_url.as_deref()
     }
 
     #[inline(always)]
@@ -307,9 +305,9 @@ impl RegistryStore {
     }
 
     #[cfg(feature = "test_mode")]
-    pub fn clone_with_port(&self, store: u16) -> Self {
+    pub fn clone_with_public_url(&self, url: String) -> Self {
         let mut inner = self.0.as_ref().clone();
-        inner.env_https_port = Some(store);
+        inner.env_public_url = Some(url);
         Self(inner.into())
     }
 
@@ -330,7 +328,7 @@ impl RegistryStore {
             env_cluster_role: cluster_role,
             env_push_shard_id: push_shard_id,
             env_hostname: hostname,
-            env_https_port: None,
+            env_public_url: None,
             id_generator: utils::snowflake::SnowflakeIdGenerator::new(),
         })
         .await

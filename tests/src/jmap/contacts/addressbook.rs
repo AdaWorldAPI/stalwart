@@ -39,7 +39,7 @@ pub async fn test(test: &TestServer) {
             "name": "Stalwart Address Book (jdoe@example.com)",
             "description": (),
             "sortOrder": 0,
-            "isSubscribed": false,
+            "isSubscribed": true,
             "isDefault": true,
             "id": default_addressbook_id,
         })
@@ -149,7 +149,7 @@ pub async fn test(test: &TestServer) {
                 "name": "Stalwart Address Book (jdoe@example.com)",
                 "description": (),
                 "sortOrder": 0,
-                "isSubscribed": false,
+                "isSubscribed": true,
                 "isDefault": false,
                 "id": default_addressbook_id,
             })

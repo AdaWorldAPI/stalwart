@@ -35,7 +35,7 @@ impl ParticipantIdentityGet for Server {
         &self,
         mut request: GetRequest<participant_identity::ParticipantIdentity>,
     ) -> trc::Result<GetResponse<participant_identity::ParticipantIdentity>> {
-        let ids = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let properties = request.unwrap_properties(&[
             ParticipantIdentityProperty::Id,
             ParticipantIdentityProperty::Name,
@@ -49,11 +49,13 @@ impl ParticipantIdentityGet for Server {
             account_id: request.account_id.into(),
             state: None,
             list: Vec::new(),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
 
         let Some(identities) = identities else {
-            response.not_found = ids.unwrap_or_default();
+            for id in ids.unwrap_or_default() {
+                response.push_not_found(id);
+            }
             return Ok(response);
         };
 
@@ -76,7 +78,7 @@ impl ParticipantIdentityGet for Server {
             // Obtain the identity object
             let document_id = id.document_id();
             let Some(identity) = identities.identities.iter().find(|i| i.id == document_id) else {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             };
 

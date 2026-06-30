@@ -36,7 +36,7 @@ use mail_auth::{
 use mail_builder::headers::{date::Date, message_id::generate_message_id_header};
 use mail_parser::{MessageParser, parsers::fields::thread::thread_name};
 use registry::schema::structs::Rate;
-use sieve::runtime::Variable;
+use sieve::{SpamStatus, runtime::Variable};
 use smtp_proto::{
     MAIL_BY_RETURN, RCPT_NOTIFY_DELAY, RCPT_NOTIFY_FAILURE, RCPT_NOTIFY_NEVER, RCPT_NOTIFY_SUCCESS,
 };
@@ -44,7 +44,7 @@ use std::{
     borrow::Cow,
     time::{Instant, SystemTime},
 };
-use trc::SmtpEvent;
+use trc::{SmtpEvent, SpamEvent};
 use utils::DomainPart;
 
 impl<T: SessionStream> Session<T> {
@@ -416,6 +416,7 @@ impl<T: SessionStream> Session<T> {
 
         // Run SPAM filter
         let mut train_spam = None;
+        let mut spam_status = None;
         if self.server.core.spam.enabled
             && self
                 .server
@@ -442,6 +443,11 @@ impl<T: SessionStream> Session<T> {
                             thread_name(parsed_message.subject().unwrap_or_default()).to_string(),
                         )
                     });
+                    spam_status = Some(if score.is_spam {
+                        SpamStatus::Spam
+                    } else {
+                        SpamStatus::Ham
+                    });
 
                     // Add scores for local recipients
                     for (is_spam, recipient) in
@@ -453,10 +459,26 @@ impl<T: SessionStream> Session<T> {
                     }
                 }
                 SpamFilterAction::Discard => {
+                    trc::event!(
+                        Spam(SpamEvent::Classify),
+                        SpanId = self.data.session_id,
+                        QueueId = message_id,
+                        Result = "discard",
+                        Reason = "Message discarded due to excessive spam score.",
+                    );
+
                     self.data.messages_sent += 1;
                     return (b"250 2.0.0 Message queued for delivery.\r\n"[..]).into();
                 }
                 SpamFilterAction::Reject => {
+                    trc::event!(
+                        Spam(SpamEvent::Classify),
+                        SpanId = self.data.session_id,
+                        QueueId = message_id,
+                        Result = "reject",
+                        Reason = "Message rejected due to excessive spam score.",
+                    );
+
                     self.data.messages_sent += 1;
                     return (b"550 5.7.1 Message rejected due to excessive spam score.\r\n"[..])
                         .into();
@@ -467,7 +489,10 @@ impl<T: SessionStream> Session<T> {
 
         // Run Milter filters
         let mut modifications = Vec::new();
-        match self.run_milters(Stage::Data, (&auth_message).into()).await {
+        match self
+            .run_milters(Stage::Data, (&auth_message).into(), message_id.into())
+            .await
+        {
             Ok(modifications_) => {
                 if !modifications_.is_empty() {
                     modifications = modifications_;
@@ -513,9 +538,13 @@ impl<T: SessionStream> Session<T> {
                     .map(|s| (s, name))
             })
         {
-            let params = self
+            let mut params = self
                 .build_script_parameters("data")
-                .with_auth_headers(&headers)
+                .with_auth_headers(&headers);
+            if let Some(spam_status) = spam_status {
+                params = params.with_spam_status(spam_status);
+            }
+            let params = params
                 .set_variable(
                     "arc.result",
                     arc_output
@@ -740,7 +769,10 @@ impl<T: SessionStream> Session<T> {
             .map_or(0, |d| d.as_secs());
         let mut message = Message {
             created,
-            return_path: mail_from.address.to_lowercase_domain().into_boxed_str(),
+            return_path: mail_from
+                .address
+                .to_lowercase_address(false)
+                .into_boxed_str(),
             recipients: Vec::with_capacity(rcpt_to.len()),
             flags: mail_from.flags,
             priority: self.data.priority,

@@ -153,6 +153,15 @@ pub enum AsnType {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[repr(u16)]
+pub enum AzureEnvironment {
+    #[default]
+    Public = 0,
+    China = 1,
+    UsGovernment = 2,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[repr(u16)]
 pub enum BlobStoreBaseType {
     #[default]
     S3 = 0,
@@ -261,6 +270,7 @@ pub enum CoordinatorType {
     Zenoh = 4,
     Redis = 5,
     RedisCluster = 6,
+    RedisSentinel = 7,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -518,7 +528,7 @@ pub enum DnsServerBootstrapType {
     #[default]
     Manual = 0,
     Tsig = 1,
-    Sig0 = 2,
+    Deprecated1 = 2,
     Cloudflare = 3,
     DigitalOcean = 4,
     DeSEC = 5,
@@ -529,6 +539,64 @@ pub enum DnsServerBootstrapType {
     Spaceship = 10,
     Route53 = 11,
     GoogleCloudDns = 12,
+    Alidns = 13,
+    ArvanCloud = 14,
+    Autodns = 15,
+    AzureDns = 16,
+    BaiduCloud = 17,
+    BluecatV2 = 18,
+    ClouDns = 19,
+    Constellix = 20,
+    Cpanel = 21,
+    Ddnss = 22,
+    DnsMadeEasy = 23,
+    Domeneshop = 24,
+    Dreamhost = 25,
+    DuckDns = 26,
+    Dynu = 27,
+    EasyDns = 28,
+    EdgeDns = 29,
+    Exoscale = 30,
+    FreeMyIp = 31,
+    GandiV5 = 32,
+    Gcore = 33,
+    Glesys = 34,
+    Godaddy = 35,
+    Hetzner = 36,
+    HostingDe = 37,
+    Hostinger = 38,
+    HuaweiCloud = 39,
+    Hurricane = 40,
+    IbmCloud = 41,
+    Infoblox = 42,
+    Infomaniak = 43,
+    Inwx = 44,
+    Ionos = 45,
+    Ipv64 = 46,
+    Joker = 47,
+    Lightsail = 48,
+    Linode = 49,
+    LuaDns = 50,
+    MythicBeasts = 51,
+    Namecheap = 52,
+    NameDotCom = 53,
+    NameSilo = 54,
+    Netcup = 55,
+    Netlify = 56,
+    Nifcloud = 57,
+    Ns1 = 58,
+    OracleCloud = 59,
+    Plesk = 60,
+    Safedns = 61,
+    Scaleway = 62,
+    TencentCloud = 63,
+    Transip = 64,
+    UltraDns = 65,
+    Vercel = 66,
+    Volcengine = 67,
+    Vultr = 68,
+    WebSupport = 69,
+    YandexCloud = 70,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -536,7 +604,7 @@ pub enum DnsServerBootstrapType {
 pub enum DnsServerType {
     #[default]
     Tsig = 0,
-    Sig0 = 1,
+    Deprecated1 = 1,
     Cloudflare = 2,
     DigitalOcean = 3,
     DeSEC = 4,
@@ -547,6 +615,64 @@ pub enum DnsServerType {
     Spaceship = 9,
     Route53 = 10,
     GoogleCloudDns = 11,
+    Alidns = 12,
+    ArvanCloud = 13,
+    Autodns = 14,
+    AzureDns = 15,
+    BaiduCloud = 16,
+    BluecatV2 = 17,
+    ClouDns = 18,
+    Constellix = 19,
+    Cpanel = 20,
+    Ddnss = 21,
+    DnsMadeEasy = 22,
+    Domeneshop = 23,
+    Dreamhost = 24,
+    DuckDns = 25,
+    Dynu = 26,
+    EasyDns = 27,
+    EdgeDns = 28,
+    Exoscale = 29,
+    FreeMyIp = 30,
+    GandiV5 = 31,
+    Gcore = 32,
+    Glesys = 33,
+    Godaddy = 34,
+    Hetzner = 35,
+    HostingDe = 36,
+    Hostinger = 37,
+    HuaweiCloud = 38,
+    Hurricane = 39,
+    IbmCloud = 40,
+    Infoblox = 41,
+    Infomaniak = 42,
+    Inwx = 43,
+    Ionos = 44,
+    Ipv64 = 45,
+    Joker = 46,
+    Lightsail = 47,
+    Linode = 48,
+    LuaDns = 49,
+    MythicBeasts = 50,
+    Namecheap = 51,
+    NameDotCom = 52,
+    NameSilo = 53,
+    Netcup = 54,
+    Netlify = 55,
+    Nifcloud = 56,
+    Ns1 = 57,
+    OracleCloud = 58,
+    Plesk = 59,
+    Safedns = 60,
+    Scaleway = 61,
+    TencentCloud = 62,
+    Transip = 63,
+    UltraDns = 64,
+    Vercel = 65,
+    Volcengine = 66,
+    Vultr = 67,
+    WebSupport = 68,
+    YandexCloud = 69,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -556,6 +682,8 @@ pub enum EncryptionAtRestType {
     Disabled = 0,
     Aes128 = 1,
     Aes256 = 2,
+    Aes256Gcm = 3,
+    ChaCha20Poly1305 = 4,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -721,6 +849,7 @@ pub enum InMemoryStoreBaseType {
     #[default]
     Redis = 0,
     RedisCluster = 1,
+    RedisSentinel = 2,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -731,6 +860,7 @@ pub enum InMemoryStoreType {
     Sharded = 1,
     Redis = 2,
     RedisCluster = 3,
+    RedisSentinel = 4,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -749,6 +879,14 @@ pub enum IpProtocol {
     #[default]
     Udp = 0,
     Tcp = 1,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[repr(u16)]
+pub enum JokerAuthType {
+    #[default]
+    ApiKey = 0,
+    UsernamePassword = 1,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -1130,6 +1268,7 @@ pub enum LookupStoreType {
     Sharded = 3,
     Redis = 4,
     RedisCluster = 5,
+    RedisSentinel = 6,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -1453,6 +1592,7 @@ pub enum Permission {
     JmapFileNodeCreate = 92,
     JmapFileNodeUpdate = 93,
     JmapFileNodeDestroy = 94,
+    JmapFileNodeCopy = 659,
     JmapShareNotificationGet = 95,
     JmapShareNotificationChanges = 96,
     JmapShareNotificationQuery = 97,

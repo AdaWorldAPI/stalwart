@@ -39,8 +39,10 @@ impl UserAccount {
         }) {
             credential.secret = password;
         } else {
+            let credential_id = self.next_credential_id().into();
             self.credentials
                 .push(Credential::Password(PasswordCredential {
+                    credential_id,
                     secret: password,
                     ..Default::default()
                 }));
@@ -85,6 +87,21 @@ impl UserAccount {
     pub fn into_password(self) -> Option<String> {
         self.into_password_credential()
             .map(|credential| credential.secret)
+    }
+
+    pub fn next_credential_id(&self) -> u64 {
+        self.credentials
+            .0
+            .values()
+            .map(|credential| match credential {
+                Credential::Password(credential) => credential.credential_id.id() + 1,
+                Credential::AppPassword(credential_properties)
+                | Credential::ApiKey(credential_properties) => {
+                    credential_properties.credential_id.id() + 1
+                }
+            })
+            .max()
+            .unwrap_or_default()
     }
 }
 

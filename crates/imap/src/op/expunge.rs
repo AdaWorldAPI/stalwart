@@ -10,7 +10,7 @@ use ahash::AHashMap;
 use common::{network::SessionStream, storage::index::ObjectIndexBuilder};
 use email::{
     cache::{MessageCacheFetch, email::MessageCacheAccess},
-    message::metadata::MessageData,
+    message::{delete::EmailDeletion, metadata::MessageData},
 };
 use imap_proto::{
     Command, ResponseCode, ResponseType, StatusResponse,
@@ -134,7 +134,12 @@ impl<T: SessionStream> SessionData<T> {
 
         // Delete ids
         let mut batch = BatchBuilder::new();
-        self.email_untag_or_delete(account_id, mailbox.id.mailbox_id, &deleted_ids, &mut batch)
+        let (fully_deleted, thread_ids) = self
+            .email_untag_or_delete(account_id, mailbox.id.mailbox_id, &deleted_ids, &mut batch)
+            .await
+            .caused_by(trc::location!())?;
+        self.server
+            .log_emptied_threads(account_id, &mut batch, thread_ids, &fully_deleted)
             .await
             .caused_by(trc::location!())?;
 
@@ -165,11 +170,13 @@ impl<T: SessionStream> SessionData<T> {
         mailbox_id: u32,
         deleted_ids: &RoaringBitmap,
         batch: &mut BatchBuilder,
-    ) -> trc::Result<()> {
+    ) -> trc::Result<(RoaringBitmap, RoaringBitmap)> {
         batch
             .with_account_id(account_id)
             .with_collection(Collection::Email);
 
+        let mut fully_deleted = RoaringBitmap::new();
+        let mut thread_ids = RoaringBitmap::new();
         self.server
             .archives(
                 account_id,
@@ -190,6 +197,8 @@ impl<T: SessionStream> SessionData<T> {
 
                         if metadata.inner.mailboxes.len() == 1 {
                             // Delete message
+                            fully_deleted.insert(document_id);
+                            thread_ids.insert(metadata.inner.thread_id.to_native());
                             batch
                                 .custom(
                                     ObjectIndexBuilder::<_, ()>::new()
@@ -228,6 +237,6 @@ impl<T: SessionStream> SessionData<T> {
             .await
             .caused_by(trc::location!())?;
 
-        Ok(())
+        Ok((fully_deleted, thread_ids))
     }
 }

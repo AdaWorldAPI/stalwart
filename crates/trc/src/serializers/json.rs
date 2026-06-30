@@ -12,6 +12,9 @@ use serde::{
     Serialize, Serializer,
     ser::{SerializeMap, SerializeSeq},
 };
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static EVENT_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct Keys<'x> {
     keys: &'x [(Key, Value)],
@@ -83,7 +86,12 @@ impl<T: AsRef<Event<EventDetails>>> Serialize for JsonEventSerializer<T> {
         if self.with_id {
             map.serialize_entry(
                 "id",
-                &format!("{}{}", event.inner.timestamp, event.inner.typ.to_id()),
+                &format!(
+                    "{}{}{}",
+                    event.inner.timestamp,
+                    EVENT_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+                    event.inner.typ.to_id()
+                ),
             )?;
         }
         if self.with_description {

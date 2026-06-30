@@ -57,7 +57,7 @@ impl MtaReportSend for Server {
         // Build message
         let mut message = self.new_message(from_addr, parent_session_id);
         for rcpt_ in rcpts {
-            message.add_recipient(rcpt_.as_ref(), self).await;
+            message.add_expanded_recipient(rcpt_.as_ref(), self).await;
         }
 
         // Sign message
@@ -104,7 +104,7 @@ impl MtaReportSend for Server {
         // Build message
         let mut message = self.new_message(from_addr.as_ref(), parent_session_id);
         for rcpt in rcpts {
-            message.add_recipient(rcpt, self).await;
+            message.add_expanded_recipient(rcpt, self).await;
         }
 
         // Sign message

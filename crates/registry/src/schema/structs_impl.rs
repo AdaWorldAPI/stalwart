@@ -289,7 +289,7 @@ impl RegistryJsonPropertyPatch for AccountSettings {
 
 impl ObjectImpl for AcmeProvider {
     const FLAGS: u64 = OBJ_FILTER_TENANT;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 2;
     const OBJECT: ObjectType = ObjectType::AcmeProvider;
 
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
@@ -320,6 +320,11 @@ impl ObjectImpl for AcmeProvider {
                 errors.push(ValidationError::required(Property::MemberTenantId));
             }
         }
+        if let Some(value) = &self.preferred_chain {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::PreferredChain));
+            }
+        }
         errors.len() == neb
     }
 
@@ -345,6 +350,8 @@ impl Pickle for AcmeProvider {
         self.renew_before.pickle(out);
         self.max_retries.pickle(out);
         self.member_tenant_id.pickle(out);
+        self.preferred_chain.pickle(out);
+        self.reuse_key.pickle(out);
     }
 
     fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
@@ -357,6 +364,12 @@ impl Pickle for AcmeProvider {
         this.renew_before = Pickle::unpickle(stream)?;
         this.max_retries = Pickle::unpickle(stream)?;
         this.member_tenant_id = Pickle::unpickle(stream)?;
+        if stream.version() >= 1 {
+            this.preferred_chain = Pickle::unpickle(stream)?;
+        }
+        if stream.version() >= 2 {
+            this.reuse_key = Pickle::unpickle(stream)?;
+        }
         Some(this)
     }
 }
@@ -372,13 +385,15 @@ impl Default for AcmeProvider {
             renew_before: AcmeRenewBefore::R23,
             max_retries: 10i64,
             member_tenant_id: Default::default(),
+            preferred_chain: Default::default(),
+            reuse_key: false,
         }
     }
 }
 
 impl IntoValue for AcmeProvider {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(10);
+        let mut map = jmap_tools::Map::with_capacity(12);
         map.insert_unchecked(Property::ChallengeType, self.challenge_type.into_value());
         map.insert_unchecked(Property::Contact, self.contact.into_value());
         map.insert_unchecked(Property::Directory, self.directory.into_value());
@@ -387,6 +402,8 @@ impl IntoValue for AcmeProvider {
         map.insert_unchecked(Property::RenewBefore, self.renew_before.into_value());
         map.insert_unchecked(Property::MaxRetries, self.max_retries.into_value());
         map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::PreferredChain, self.preferred_chain.into_value());
+        map.insert_unchecked(Property::ReuseKey, self.reuse_key.into_value());
         JmapValue::Object(map)
     }
 }
@@ -421,6 +438,10 @@ impl RegistryJsonPropertyPatch for AcmeProvider {
             Some(Property::MemberTenantId) => self
                 .member_tenant_id
                 .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::PreferredChain) => self
+                .preferred_chain
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ReuseKey) => self.reuse_key.patch(pointer, value),
             Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
                 property: Property::Type,
                 value,
@@ -3596,7 +3617,7 @@ impl RegistryJsonPropertyPatch for AzureStore {
 
 impl ObjectImpl for BlobStore {
     const FLAGS: u64 = OBJ_SINGLETON;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 1;
     const OBJECT: ObjectType = ObjectType::BlobStore;
 
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
@@ -5702,6 +5723,7 @@ impl ObjectImpl for Coordinator {
             Coordinator::Zenoh(inner) => inner.validate(errors),
             Coordinator::Redis(inner) => inner.validate(errors),
             Coordinator::RedisCluster(inner) => inner.validate(errors),
+            Coordinator::RedisSentinel(inner) => inner.validate(errors),
         }
     }
 
@@ -5743,6 +5765,10 @@ impl Pickle for Coordinator {
                 6u16.pickle(out);
                 inner.pickle(out);
             }
+            Coordinator::RedisSentinel(inner) => {
+                7u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -5755,6 +5781,7 @@ impl Pickle for Coordinator {
             4 => Pickle::unpickle(stream).map(Coordinator::Zenoh),
             5 => Pickle::unpickle(stream).map(Coordinator::Redis),
             6 => Pickle::unpickle(stream).map(Coordinator::RedisCluster),
+            7 => Pickle::unpickle(stream).map(Coordinator::RedisSentinel),
             _ => None,
         }
     }
@@ -5808,6 +5835,13 @@ impl IntoValue for Coordinator {
                     .insert_unchecked(Property::Type, JmapValue::Str("RedisCluster".into()));
                 obj
             }
+            Coordinator::RedisSentinel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("RedisSentinel".into()));
+                obj
+            }
         }
     }
 }
@@ -5829,6 +5863,9 @@ impl RegistryJsonPatch for Coordinator {
                 CoordinatorType::RedisCluster => {
                     *self = Coordinator::RedisCluster(Default::default())
                 }
+                CoordinatorType::RedisSentinel => {
+                    *self = Coordinator::RedisSentinel(Default::default())
+                }
             }
         }
         match self {
@@ -5839,6 +5876,7 @@ impl RegistryJsonPatch for Coordinator {
             Coordinator::Zenoh(inner) => inner.patch(pointer, value),
             Coordinator::Redis(inner) => inner.patch(pointer, value),
             Coordinator::RedisCluster(inner) => inner.patch(pointer, value),
+            Coordinator::RedisSentinel(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -5853,6 +5891,7 @@ impl Coordinator {
             Coordinator::Zenoh(_) => CoordinatorType::Zenoh,
             Coordinator::Redis(_) => CoordinatorType::Redis,
             Coordinator::RedisCluster(_) => CoordinatorType::RedisCluster,
+            Coordinator::RedisSentinel(_) => CoordinatorType::RedisSentinel,
         }
     }
 }
@@ -10195,13 +10234,13 @@ impl RegistryJsonPropertyPatch for DnsResolverTls {
 
 impl ObjectImpl for DnsServer {
     const FLAGS: u64 = OBJ_FILTER_TENANT;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 1;
     const OBJECT: ObjectType = ObjectType::DnsServer;
 
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         match self {
             DnsServer::Tsig(inner) => inner.validate(errors),
-            DnsServer::Sig0(inner) => inner.validate(errors),
+            DnsServer::Deprecated1 => true,
             DnsServer::Cloudflare(inner) => inner.validate(errors),
             DnsServer::DigitalOcean(inner) => inner.validate(errors),
             DnsServer::DeSEC(inner) => inner.validate(errors),
@@ -10212,6 +10251,64 @@ impl ObjectImpl for DnsServer {
             DnsServer::Spaceship(inner) => inner.validate(errors),
             DnsServer::Route53(inner) => inner.validate(errors),
             DnsServer::GoogleCloudDns(inner) => inner.validate(errors),
+            DnsServer::Alidns(inner) => inner.validate(errors),
+            DnsServer::ArvanCloud(inner) => inner.validate(errors),
+            DnsServer::Autodns(inner) => inner.validate(errors),
+            DnsServer::AzureDns(inner) => inner.validate(errors),
+            DnsServer::BaiduCloud(inner) => inner.validate(errors),
+            DnsServer::BluecatV2(inner) => inner.validate(errors),
+            DnsServer::ClouDns(inner) => inner.validate(errors),
+            DnsServer::Constellix(inner) => inner.validate(errors),
+            DnsServer::Cpanel(inner) => inner.validate(errors),
+            DnsServer::Ddnss(inner) => inner.validate(errors),
+            DnsServer::DnsMadeEasy(inner) => inner.validate(errors),
+            DnsServer::Domeneshop(inner) => inner.validate(errors),
+            DnsServer::Dreamhost(inner) => inner.validate(errors),
+            DnsServer::DuckDns(inner) => inner.validate(errors),
+            DnsServer::Dynu(inner) => inner.validate(errors),
+            DnsServer::EasyDns(inner) => inner.validate(errors),
+            DnsServer::EdgeDns(inner) => inner.validate(errors),
+            DnsServer::Exoscale(inner) => inner.validate(errors),
+            DnsServer::FreeMyIp(inner) => inner.validate(errors),
+            DnsServer::GandiV5(inner) => inner.validate(errors),
+            DnsServer::Gcore(inner) => inner.validate(errors),
+            DnsServer::Glesys(inner) => inner.validate(errors),
+            DnsServer::Godaddy(inner) => inner.validate(errors),
+            DnsServer::Hetzner(inner) => inner.validate(errors),
+            DnsServer::HostingDe(inner) => inner.validate(errors),
+            DnsServer::Hostinger(inner) => inner.validate(errors),
+            DnsServer::HuaweiCloud(inner) => inner.validate(errors),
+            DnsServer::Hurricane(inner) => inner.validate(errors),
+            DnsServer::IbmCloud(inner) => inner.validate(errors),
+            DnsServer::Infoblox(inner) => inner.validate(errors),
+            DnsServer::Infomaniak(inner) => inner.validate(errors),
+            DnsServer::Inwx(inner) => inner.validate(errors),
+            DnsServer::Ionos(inner) => inner.validate(errors),
+            DnsServer::Ipv64(inner) => inner.validate(errors),
+            DnsServer::Joker(inner) => inner.validate(errors),
+            DnsServer::Lightsail(inner) => inner.validate(errors),
+            DnsServer::Linode(inner) => inner.validate(errors),
+            DnsServer::LuaDns(inner) => inner.validate(errors),
+            DnsServer::MythicBeasts(inner) => inner.validate(errors),
+            DnsServer::Namecheap(inner) => inner.validate(errors),
+            DnsServer::NameDotCom(inner) => inner.validate(errors),
+            DnsServer::NameSilo(inner) => inner.validate(errors),
+            DnsServer::Netcup(inner) => inner.validate(errors),
+            DnsServer::Netlify(inner) => inner.validate(errors),
+            DnsServer::Nifcloud(inner) => inner.validate(errors),
+            DnsServer::Ns1(inner) => inner.validate(errors),
+            DnsServer::OracleCloud(inner) => inner.validate(errors),
+            DnsServer::Plesk(inner) => inner.validate(errors),
+            DnsServer::Safedns(inner) => inner.validate(errors),
+            DnsServer::Scaleway(inner) => inner.validate(errors),
+            DnsServer::TencentCloud(inner) => inner.validate(errors),
+            DnsServer::Transip(inner) => inner.validate(errors),
+            DnsServer::UltraDns(inner) => inner.validate(errors),
+            DnsServer::Vercel(inner) => inner.validate(errors),
+            DnsServer::Volcengine(inner) => inner.validate(errors),
+            DnsServer::Vultr(inner) => inner.validate(errors),
+            DnsServer::WebSupport(inner) => inner.validate(errors),
+            DnsServer::YandexCloud(inner) => inner.validate(errors),
         }
     }
 
@@ -10220,9 +10317,7 @@ impl ObjectImpl for DnsServer {
             DnsServer::Tsig(object) => {
                 object.index(i);
             }
-            DnsServer::Sig0(object) => {
-                object.index(i);
-            }
+            DnsServer::Deprecated1 => {}
             DnsServer::Cloudflare(object) => {
                 object.index(i);
             }
@@ -10253,6 +10348,180 @@ impl ObjectImpl for DnsServer {
             DnsServer::GoogleCloudDns(object) => {
                 object.index(i);
             }
+            DnsServer::Alidns(object) => {
+                object.index(i);
+            }
+            DnsServer::ArvanCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Autodns(object) => {
+                object.index(i);
+            }
+            DnsServer::AzureDns(object) => {
+                object.index(i);
+            }
+            DnsServer::BaiduCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::BluecatV2(object) => {
+                object.index(i);
+            }
+            DnsServer::ClouDns(object) => {
+                object.index(i);
+            }
+            DnsServer::Constellix(object) => {
+                object.index(i);
+            }
+            DnsServer::Cpanel(object) => {
+                object.index(i);
+            }
+            DnsServer::Ddnss(object) => {
+                object.index(i);
+            }
+            DnsServer::DnsMadeEasy(object) => {
+                object.index(i);
+            }
+            DnsServer::Domeneshop(object) => {
+                object.index(i);
+            }
+            DnsServer::Dreamhost(object) => {
+                object.index(i);
+            }
+            DnsServer::DuckDns(object) => {
+                object.index(i);
+            }
+            DnsServer::Dynu(object) => {
+                object.index(i);
+            }
+            DnsServer::EasyDns(object) => {
+                object.index(i);
+            }
+            DnsServer::EdgeDns(object) => {
+                object.index(i);
+            }
+            DnsServer::Exoscale(object) => {
+                object.index(i);
+            }
+            DnsServer::FreeMyIp(object) => {
+                object.index(i);
+            }
+            DnsServer::GandiV5(object) => {
+                object.index(i);
+            }
+            DnsServer::Gcore(object) => {
+                object.index(i);
+            }
+            DnsServer::Glesys(object) => {
+                object.index(i);
+            }
+            DnsServer::Godaddy(object) => {
+                object.index(i);
+            }
+            DnsServer::Hetzner(object) => {
+                object.index(i);
+            }
+            DnsServer::HostingDe(object) => {
+                object.index(i);
+            }
+            DnsServer::Hostinger(object) => {
+                object.index(i);
+            }
+            DnsServer::HuaweiCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Hurricane(object) => {
+                object.index(i);
+            }
+            DnsServer::IbmCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Infoblox(object) => {
+                object.index(i);
+            }
+            DnsServer::Infomaniak(object) => {
+                object.index(i);
+            }
+            DnsServer::Inwx(object) => {
+                object.index(i);
+            }
+            DnsServer::Ionos(object) => {
+                object.index(i);
+            }
+            DnsServer::Ipv64(object) => {
+                object.index(i);
+            }
+            DnsServer::Joker(object) => {
+                object.index(i);
+            }
+            DnsServer::Lightsail(object) => {
+                object.index(i);
+            }
+            DnsServer::Linode(object) => {
+                object.index(i);
+            }
+            DnsServer::LuaDns(object) => {
+                object.index(i);
+            }
+            DnsServer::MythicBeasts(object) => {
+                object.index(i);
+            }
+            DnsServer::Namecheap(object) => {
+                object.index(i);
+            }
+            DnsServer::NameDotCom(object) => {
+                object.index(i);
+            }
+            DnsServer::NameSilo(object) => {
+                object.index(i);
+            }
+            DnsServer::Netcup(object) => {
+                object.index(i);
+            }
+            DnsServer::Netlify(object) => {
+                object.index(i);
+            }
+            DnsServer::Nifcloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Ns1(object) => {
+                object.index(i);
+            }
+            DnsServer::OracleCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Plesk(object) => {
+                object.index(i);
+            }
+            DnsServer::Safedns(object) => {
+                object.index(i);
+            }
+            DnsServer::Scaleway(object) => {
+                object.index(i);
+            }
+            DnsServer::TencentCloud(object) => {
+                object.index(i);
+            }
+            DnsServer::Transip(object) => {
+                object.index(i);
+            }
+            DnsServer::UltraDns(object) => {
+                object.index(i);
+            }
+            DnsServer::Vercel(object) => {
+                object.index(i);
+            }
+            DnsServer::Volcengine(object) => {
+                object.index(i);
+            }
+            DnsServer::Vultr(object) => {
+                object.index(i);
+            }
+            DnsServer::WebSupport(object) => {
+                object.index(i);
+            }
+            DnsServer::YandexCloud(object) => {
+                object.index(i);
+            }
         }
     }
 }
@@ -10270,9 +10539,8 @@ impl Pickle for DnsServer {
                 0u16.pickle(out);
                 inner.pickle(out);
             }
-            DnsServer::Sig0(inner) => {
+            DnsServer::Deprecated1 => {
                 1u16.pickle(out);
-                inner.pickle(out);
             }
             DnsServer::Cloudflare(inner) => {
                 2u16.pickle(out);
@@ -10314,13 +10582,245 @@ impl Pickle for DnsServer {
                 11u16.pickle(out);
                 inner.pickle(out);
             }
+            DnsServer::Alidns(inner) => {
+                12u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::ArvanCloud(inner) => {
+                13u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Autodns(inner) => {
+                14u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::AzureDns(inner) => {
+                15u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::BaiduCloud(inner) => {
+                16u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::BluecatV2(inner) => {
+                17u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::ClouDns(inner) => {
+                18u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Constellix(inner) => {
+                19u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Cpanel(inner) => {
+                20u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Ddnss(inner) => {
+                21u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::DnsMadeEasy(inner) => {
+                22u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Domeneshop(inner) => {
+                23u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Dreamhost(inner) => {
+                24u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::DuckDns(inner) => {
+                25u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Dynu(inner) => {
+                26u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::EasyDns(inner) => {
+                27u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::EdgeDns(inner) => {
+                28u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Exoscale(inner) => {
+                29u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::FreeMyIp(inner) => {
+                30u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::GandiV5(inner) => {
+                31u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Gcore(inner) => {
+                32u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Glesys(inner) => {
+                33u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Godaddy(inner) => {
+                34u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Hetzner(inner) => {
+                35u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::HostingDe(inner) => {
+                36u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Hostinger(inner) => {
+                37u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::HuaweiCloud(inner) => {
+                38u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Hurricane(inner) => {
+                39u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::IbmCloud(inner) => {
+                40u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Infoblox(inner) => {
+                41u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Infomaniak(inner) => {
+                42u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Inwx(inner) => {
+                43u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Ionos(inner) => {
+                44u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Ipv64(inner) => {
+                45u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Joker(inner) => {
+                46u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Lightsail(inner) => {
+                47u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Linode(inner) => {
+                48u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::LuaDns(inner) => {
+                49u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::MythicBeasts(inner) => {
+                50u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Namecheap(inner) => {
+                51u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::NameDotCom(inner) => {
+                52u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::NameSilo(inner) => {
+                53u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Netcup(inner) => {
+                54u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Netlify(inner) => {
+                55u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Nifcloud(inner) => {
+                56u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Ns1(inner) => {
+                57u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::OracleCloud(inner) => {
+                58u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Plesk(inner) => {
+                59u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Safedns(inner) => {
+                60u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Scaleway(inner) => {
+                61u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::TencentCloud(inner) => {
+                62u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Transip(inner) => {
+                63u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::UltraDns(inner) => {
+                64u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Vercel(inner) => {
+                65u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Volcengine(inner) => {
+                66u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::Vultr(inner) => {
+                67u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::WebSupport(inner) => {
+                68u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServer::YandexCloud(inner) => {
+                69u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
     fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
         match u16::unpickle(stream)? {
             0 => Pickle::unpickle(stream).map(DnsServer::Tsig),
-            1 => Pickle::unpickle(stream).map(DnsServer::Sig0),
+            1 => Some(DnsServer::Deprecated1),
             2 => Pickle::unpickle(stream).map(DnsServer::Cloudflare),
             3 => Pickle::unpickle(stream).map(DnsServer::DigitalOcean),
             4 => Pickle::unpickle(stream).map(DnsServer::DeSEC),
@@ -10331,6 +10831,64 @@ impl Pickle for DnsServer {
             9 => Pickle::unpickle(stream).map(DnsServer::Spaceship),
             10 => Pickle::unpickle(stream).map(DnsServer::Route53),
             11 => Pickle::unpickle(stream).map(DnsServer::GoogleCloudDns),
+            12 => Pickle::unpickle(stream).map(DnsServer::Alidns),
+            13 => Pickle::unpickle(stream).map(DnsServer::ArvanCloud),
+            14 => Pickle::unpickle(stream).map(DnsServer::Autodns),
+            15 => Pickle::unpickle(stream).map(DnsServer::AzureDns),
+            16 => Pickle::unpickle(stream).map(DnsServer::BaiduCloud),
+            17 => Pickle::unpickle(stream).map(DnsServer::BluecatV2),
+            18 => Pickle::unpickle(stream).map(DnsServer::ClouDns),
+            19 => Pickle::unpickle(stream).map(DnsServer::Constellix),
+            20 => Pickle::unpickle(stream).map(DnsServer::Cpanel),
+            21 => Pickle::unpickle(stream).map(DnsServer::Ddnss),
+            22 => Pickle::unpickle(stream).map(DnsServer::DnsMadeEasy),
+            23 => Pickle::unpickle(stream).map(DnsServer::Domeneshop),
+            24 => Pickle::unpickle(stream).map(DnsServer::Dreamhost),
+            25 => Pickle::unpickle(stream).map(DnsServer::DuckDns),
+            26 => Pickle::unpickle(stream).map(DnsServer::Dynu),
+            27 => Pickle::unpickle(stream).map(DnsServer::EasyDns),
+            28 => Pickle::unpickle(stream).map(DnsServer::EdgeDns),
+            29 => Pickle::unpickle(stream).map(DnsServer::Exoscale),
+            30 => Pickle::unpickle(stream).map(DnsServer::FreeMyIp),
+            31 => Pickle::unpickle(stream).map(DnsServer::GandiV5),
+            32 => Pickle::unpickle(stream).map(DnsServer::Gcore),
+            33 => Pickle::unpickle(stream).map(DnsServer::Glesys),
+            34 => Pickle::unpickle(stream).map(DnsServer::Godaddy),
+            35 => Pickle::unpickle(stream).map(DnsServer::Hetzner),
+            36 => Pickle::unpickle(stream).map(DnsServer::HostingDe),
+            37 => Pickle::unpickle(stream).map(DnsServer::Hostinger),
+            38 => Pickle::unpickle(stream).map(DnsServer::HuaweiCloud),
+            39 => Pickle::unpickle(stream).map(DnsServer::Hurricane),
+            40 => Pickle::unpickle(stream).map(DnsServer::IbmCloud),
+            41 => Pickle::unpickle(stream).map(DnsServer::Infoblox),
+            42 => Pickle::unpickle(stream).map(DnsServer::Infomaniak),
+            43 => Pickle::unpickle(stream).map(DnsServer::Inwx),
+            44 => Pickle::unpickle(stream).map(DnsServer::Ionos),
+            45 => Pickle::unpickle(stream).map(DnsServer::Ipv64),
+            46 => Pickle::unpickle(stream).map(DnsServer::Joker),
+            47 => Pickle::unpickle(stream).map(DnsServer::Lightsail),
+            48 => Pickle::unpickle(stream).map(DnsServer::Linode),
+            49 => Pickle::unpickle(stream).map(DnsServer::LuaDns),
+            50 => Pickle::unpickle(stream).map(DnsServer::MythicBeasts),
+            51 => Pickle::unpickle(stream).map(DnsServer::Namecheap),
+            52 => Pickle::unpickle(stream).map(DnsServer::NameDotCom),
+            53 => Pickle::unpickle(stream).map(DnsServer::NameSilo),
+            54 => Pickle::unpickle(stream).map(DnsServer::Netcup),
+            55 => Pickle::unpickle(stream).map(DnsServer::Netlify),
+            56 => Pickle::unpickle(stream).map(DnsServer::Nifcloud),
+            57 => Pickle::unpickle(stream).map(DnsServer::Ns1),
+            58 => Pickle::unpickle(stream).map(DnsServer::OracleCloud),
+            59 => Pickle::unpickle(stream).map(DnsServer::Plesk),
+            60 => Pickle::unpickle(stream).map(DnsServer::Safedns),
+            61 => Pickle::unpickle(stream).map(DnsServer::Scaleway),
+            62 => Pickle::unpickle(stream).map(DnsServer::TencentCloud),
+            63 => Pickle::unpickle(stream).map(DnsServer::Transip),
+            64 => Pickle::unpickle(stream).map(DnsServer::UltraDns),
+            65 => Pickle::unpickle(stream).map(DnsServer::Vercel),
+            66 => Pickle::unpickle(stream).map(DnsServer::Volcengine),
+            67 => Pickle::unpickle(stream).map(DnsServer::Vultr),
+            68 => Pickle::unpickle(stream).map(DnsServer::WebSupport),
+            69 => Pickle::unpickle(stream).map(DnsServer::YandexCloud),
             _ => None,
         }
     }
@@ -10346,12 +10904,10 @@ impl IntoValue for DnsServer {
                     .insert_unchecked(Property::Type, JmapValue::Str("Tsig".into()));
                 obj
             }
-            DnsServer::Sig0(obj) => {
-                let mut obj = obj.into_value();
-                obj.as_object_mut()
-                    .unwrap()
-                    .insert_unchecked(Property::Type, JmapValue::Str("Sig0".into()));
-                obj
+            DnsServer::Deprecated1 => {
+                let mut obj = jmap_tools::Map::new();
+                obj.insert_unchecked(Property::Type, JmapValue::Str("Deprecated1".into()));
+                JmapValue::Object(obj)
             }
             DnsServer::Cloudflare(obj) => {
                 let mut obj = obj.into_value();
@@ -10423,6 +10979,412 @@ impl IntoValue for DnsServer {
                     .insert_unchecked(Property::Type, JmapValue::Str("GoogleCloudDns".into()));
                 obj
             }
+            DnsServer::Alidns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Alidns".into()));
+                obj
+            }
+            DnsServer::ArvanCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ArvanCloud".into()));
+                obj
+            }
+            DnsServer::Autodns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Autodns".into()));
+                obj
+            }
+            DnsServer::AzureDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("AzureDns".into()));
+                obj
+            }
+            DnsServer::BaiduCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("BaiduCloud".into()));
+                obj
+            }
+            DnsServer::BluecatV2(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("BluecatV2".into()));
+                obj
+            }
+            DnsServer::ClouDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ClouDns".into()));
+                obj
+            }
+            DnsServer::Constellix(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Constellix".into()));
+                obj
+            }
+            DnsServer::Cpanel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Cpanel".into()));
+                obj
+            }
+            DnsServer::Ddnss(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ddnss".into()));
+                obj
+            }
+            DnsServer::DnsMadeEasy(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("DnsMadeEasy".into()));
+                obj
+            }
+            DnsServer::Domeneshop(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Domeneshop".into()));
+                obj
+            }
+            DnsServer::Dreamhost(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Dreamhost".into()));
+                obj
+            }
+            DnsServer::DuckDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("DuckDns".into()));
+                obj
+            }
+            DnsServer::Dynu(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Dynu".into()));
+                obj
+            }
+            DnsServer::EasyDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("EasyDns".into()));
+                obj
+            }
+            DnsServer::EdgeDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("EdgeDns".into()));
+                obj
+            }
+            DnsServer::Exoscale(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Exoscale".into()));
+                obj
+            }
+            DnsServer::FreeMyIp(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("FreeMyIp".into()));
+                obj
+            }
+            DnsServer::GandiV5(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("GandiV5".into()));
+                obj
+            }
+            DnsServer::Gcore(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Gcore".into()));
+                obj
+            }
+            DnsServer::Glesys(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Glesys".into()));
+                obj
+            }
+            DnsServer::Godaddy(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Godaddy".into()));
+                obj
+            }
+            DnsServer::Hetzner(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hetzner".into()));
+                obj
+            }
+            DnsServer::HostingDe(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("HostingDe".into()));
+                obj
+            }
+            DnsServer::Hostinger(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hostinger".into()));
+                obj
+            }
+            DnsServer::HuaweiCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("HuaweiCloud".into()));
+                obj
+            }
+            DnsServer::Hurricane(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hurricane".into()));
+                obj
+            }
+            DnsServer::IbmCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("IbmCloud".into()));
+                obj
+            }
+            DnsServer::Infoblox(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Infoblox".into()));
+                obj
+            }
+            DnsServer::Infomaniak(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Infomaniak".into()));
+                obj
+            }
+            DnsServer::Inwx(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Inwx".into()));
+                obj
+            }
+            DnsServer::Ionos(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ionos".into()));
+                obj
+            }
+            DnsServer::Ipv64(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ipv64".into()));
+                obj
+            }
+            DnsServer::Joker(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Joker".into()));
+                obj
+            }
+            DnsServer::Lightsail(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Lightsail".into()));
+                obj
+            }
+            DnsServer::Linode(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Linode".into()));
+                obj
+            }
+            DnsServer::LuaDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("LuaDns".into()));
+                obj
+            }
+            DnsServer::MythicBeasts(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("MythicBeasts".into()));
+                obj
+            }
+            DnsServer::Namecheap(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Namecheap".into()));
+                obj
+            }
+            DnsServer::NameDotCom(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("NameDotCom".into()));
+                obj
+            }
+            DnsServer::NameSilo(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("NameSilo".into()));
+                obj
+            }
+            DnsServer::Netcup(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Netcup".into()));
+                obj
+            }
+            DnsServer::Netlify(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Netlify".into()));
+                obj
+            }
+            DnsServer::Nifcloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Nifcloud".into()));
+                obj
+            }
+            DnsServer::Ns1(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ns1".into()));
+                obj
+            }
+            DnsServer::OracleCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("OracleCloud".into()));
+                obj
+            }
+            DnsServer::Plesk(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Plesk".into()));
+                obj
+            }
+            DnsServer::Safedns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Safedns".into()));
+                obj
+            }
+            DnsServer::Scaleway(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Scaleway".into()));
+                obj
+            }
+            DnsServer::TencentCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("TencentCloud".into()));
+                obj
+            }
+            DnsServer::Transip(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Transip".into()));
+                obj
+            }
+            DnsServer::UltraDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("UltraDns".into()));
+                obj
+            }
+            DnsServer::Vercel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Vercel".into()));
+                obj
+            }
+            DnsServer::Volcengine(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Volcengine".into()));
+                obj
+            }
+            DnsServer::Vultr(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Vultr".into()));
+                obj
+            }
+            DnsServer::WebSupport(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("WebSupport".into()));
+                obj
+            }
+            DnsServer::YandexCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("YandexCloud".into()));
+                obj
+            }
         }
     }
 }
@@ -10436,7 +11398,7 @@ impl RegistryJsonPatch for DnsServer {
         if !pointer.has_next() {
             match object_type(&pointer, &value)? {
                 DnsServerType::Tsig => *self = DnsServer::Tsig(Default::default()),
-                DnsServerType::Sig0 => *self = DnsServer::Sig0(Default::default()),
+                DnsServerType::Deprecated1 => *self = DnsServer::Deprecated1,
                 DnsServerType::Cloudflare => *self = DnsServer::Cloudflare(Default::default()),
                 DnsServerType::DigitalOcean => *self = DnsServer::DigitalOcean(Default::default()),
                 DnsServerType::DeSEC => *self = DnsServer::DeSEC(Default::default()),
@@ -10449,11 +11411,69 @@ impl RegistryJsonPatch for DnsServer {
                 DnsServerType::GoogleCloudDns => {
                     *self = DnsServer::GoogleCloudDns(Default::default())
                 }
+                DnsServerType::Alidns => *self = DnsServer::Alidns(Default::default()),
+                DnsServerType::ArvanCloud => *self = DnsServer::ArvanCloud(Default::default()),
+                DnsServerType::Autodns => *self = DnsServer::Autodns(Default::default()),
+                DnsServerType::AzureDns => *self = DnsServer::AzureDns(Default::default()),
+                DnsServerType::BaiduCloud => *self = DnsServer::BaiduCloud(Default::default()),
+                DnsServerType::BluecatV2 => *self = DnsServer::BluecatV2(Default::default()),
+                DnsServerType::ClouDns => *self = DnsServer::ClouDns(Default::default()),
+                DnsServerType::Constellix => *self = DnsServer::Constellix(Default::default()),
+                DnsServerType::Cpanel => *self = DnsServer::Cpanel(Default::default()),
+                DnsServerType::Ddnss => *self = DnsServer::Ddnss(Default::default()),
+                DnsServerType::DnsMadeEasy => *self = DnsServer::DnsMadeEasy(Default::default()),
+                DnsServerType::Domeneshop => *self = DnsServer::Domeneshop(Default::default()),
+                DnsServerType::Dreamhost => *self = DnsServer::Dreamhost(Default::default()),
+                DnsServerType::DuckDns => *self = DnsServer::DuckDns(Default::default()),
+                DnsServerType::Dynu => *self = DnsServer::Dynu(Default::default()),
+                DnsServerType::EasyDns => *self = DnsServer::EasyDns(Default::default()),
+                DnsServerType::EdgeDns => *self = DnsServer::EdgeDns(Default::default()),
+                DnsServerType::Exoscale => *self = DnsServer::Exoscale(Default::default()),
+                DnsServerType::FreeMyIp => *self = DnsServer::FreeMyIp(Default::default()),
+                DnsServerType::GandiV5 => *self = DnsServer::GandiV5(Default::default()),
+                DnsServerType::Gcore => *self = DnsServer::Gcore(Default::default()),
+                DnsServerType::Glesys => *self = DnsServer::Glesys(Default::default()),
+                DnsServerType::Godaddy => *self = DnsServer::Godaddy(Default::default()),
+                DnsServerType::Hetzner => *self = DnsServer::Hetzner(Default::default()),
+                DnsServerType::HostingDe => *self = DnsServer::HostingDe(Default::default()),
+                DnsServerType::Hostinger => *self = DnsServer::Hostinger(Default::default()),
+                DnsServerType::HuaweiCloud => *self = DnsServer::HuaweiCloud(Default::default()),
+                DnsServerType::Hurricane => *self = DnsServer::Hurricane(Default::default()),
+                DnsServerType::IbmCloud => *self = DnsServer::IbmCloud(Default::default()),
+                DnsServerType::Infoblox => *self = DnsServer::Infoblox(Default::default()),
+                DnsServerType::Infomaniak => *self = DnsServer::Infomaniak(Default::default()),
+                DnsServerType::Inwx => *self = DnsServer::Inwx(Default::default()),
+                DnsServerType::Ionos => *self = DnsServer::Ionos(Default::default()),
+                DnsServerType::Ipv64 => *self = DnsServer::Ipv64(Default::default()),
+                DnsServerType::Joker => *self = DnsServer::Joker(Default::default()),
+                DnsServerType::Lightsail => *self = DnsServer::Lightsail(Default::default()),
+                DnsServerType::Linode => *self = DnsServer::Linode(Default::default()),
+                DnsServerType::LuaDns => *self = DnsServer::LuaDns(Default::default()),
+                DnsServerType::MythicBeasts => *self = DnsServer::MythicBeasts(Default::default()),
+                DnsServerType::Namecheap => *self = DnsServer::Namecheap(Default::default()),
+                DnsServerType::NameDotCom => *self = DnsServer::NameDotCom(Default::default()),
+                DnsServerType::NameSilo => *self = DnsServer::NameSilo(Default::default()),
+                DnsServerType::Netcup => *self = DnsServer::Netcup(Default::default()),
+                DnsServerType::Netlify => *self = DnsServer::Netlify(Default::default()),
+                DnsServerType::Nifcloud => *self = DnsServer::Nifcloud(Default::default()),
+                DnsServerType::Ns1 => *self = DnsServer::Ns1(Default::default()),
+                DnsServerType::OracleCloud => *self = DnsServer::OracleCloud(Default::default()),
+                DnsServerType::Plesk => *self = DnsServer::Plesk(Default::default()),
+                DnsServerType::Safedns => *self = DnsServer::Safedns(Default::default()),
+                DnsServerType::Scaleway => *self = DnsServer::Scaleway(Default::default()),
+                DnsServerType::TencentCloud => *self = DnsServer::TencentCloud(Default::default()),
+                DnsServerType::Transip => *self = DnsServer::Transip(Default::default()),
+                DnsServerType::UltraDns => *self = DnsServer::UltraDns(Default::default()),
+                DnsServerType::Vercel => *self = DnsServer::Vercel(Default::default()),
+                DnsServerType::Volcengine => *self = DnsServer::Volcengine(Default::default()),
+                DnsServerType::Vultr => *self = DnsServer::Vultr(Default::default()),
+                DnsServerType::WebSupport => *self = DnsServer::WebSupport(Default::default()),
+                DnsServerType::YandexCloud => *self = DnsServer::YandexCloud(Default::default()),
             }
         }
         match self {
             DnsServer::Tsig(inner) => inner.patch(pointer, value),
-            DnsServer::Sig0(inner) => inner.patch(pointer, value),
+            DnsServer::Deprecated1 => pointer.assert_eof(),
             DnsServer::Cloudflare(inner) => inner.patch(pointer, value),
             DnsServer::DigitalOcean(inner) => inner.patch(pointer, value),
             DnsServer::DeSEC(inner) => inner.patch(pointer, value),
@@ -10464,6 +11484,64 @@ impl RegistryJsonPatch for DnsServer {
             DnsServer::Spaceship(inner) => inner.patch(pointer, value),
             DnsServer::Route53(inner) => inner.patch(pointer, value),
             DnsServer::GoogleCloudDns(inner) => inner.patch(pointer, value),
+            DnsServer::Alidns(inner) => inner.patch(pointer, value),
+            DnsServer::ArvanCloud(inner) => inner.patch(pointer, value),
+            DnsServer::Autodns(inner) => inner.patch(pointer, value),
+            DnsServer::AzureDns(inner) => inner.patch(pointer, value),
+            DnsServer::BaiduCloud(inner) => inner.patch(pointer, value),
+            DnsServer::BluecatV2(inner) => inner.patch(pointer, value),
+            DnsServer::ClouDns(inner) => inner.patch(pointer, value),
+            DnsServer::Constellix(inner) => inner.patch(pointer, value),
+            DnsServer::Cpanel(inner) => inner.patch(pointer, value),
+            DnsServer::Ddnss(inner) => inner.patch(pointer, value),
+            DnsServer::DnsMadeEasy(inner) => inner.patch(pointer, value),
+            DnsServer::Domeneshop(inner) => inner.patch(pointer, value),
+            DnsServer::Dreamhost(inner) => inner.patch(pointer, value),
+            DnsServer::DuckDns(inner) => inner.patch(pointer, value),
+            DnsServer::Dynu(inner) => inner.patch(pointer, value),
+            DnsServer::EasyDns(inner) => inner.patch(pointer, value),
+            DnsServer::EdgeDns(inner) => inner.patch(pointer, value),
+            DnsServer::Exoscale(inner) => inner.patch(pointer, value),
+            DnsServer::FreeMyIp(inner) => inner.patch(pointer, value),
+            DnsServer::GandiV5(inner) => inner.patch(pointer, value),
+            DnsServer::Gcore(inner) => inner.patch(pointer, value),
+            DnsServer::Glesys(inner) => inner.patch(pointer, value),
+            DnsServer::Godaddy(inner) => inner.patch(pointer, value),
+            DnsServer::Hetzner(inner) => inner.patch(pointer, value),
+            DnsServer::HostingDe(inner) => inner.patch(pointer, value),
+            DnsServer::Hostinger(inner) => inner.patch(pointer, value),
+            DnsServer::HuaweiCloud(inner) => inner.patch(pointer, value),
+            DnsServer::Hurricane(inner) => inner.patch(pointer, value),
+            DnsServer::IbmCloud(inner) => inner.patch(pointer, value),
+            DnsServer::Infoblox(inner) => inner.patch(pointer, value),
+            DnsServer::Infomaniak(inner) => inner.patch(pointer, value),
+            DnsServer::Inwx(inner) => inner.patch(pointer, value),
+            DnsServer::Ionos(inner) => inner.patch(pointer, value),
+            DnsServer::Ipv64(inner) => inner.patch(pointer, value),
+            DnsServer::Joker(inner) => inner.patch(pointer, value),
+            DnsServer::Lightsail(inner) => inner.patch(pointer, value),
+            DnsServer::Linode(inner) => inner.patch(pointer, value),
+            DnsServer::LuaDns(inner) => inner.patch(pointer, value),
+            DnsServer::MythicBeasts(inner) => inner.patch(pointer, value),
+            DnsServer::Namecheap(inner) => inner.patch(pointer, value),
+            DnsServer::NameDotCom(inner) => inner.patch(pointer, value),
+            DnsServer::NameSilo(inner) => inner.patch(pointer, value),
+            DnsServer::Netcup(inner) => inner.patch(pointer, value),
+            DnsServer::Netlify(inner) => inner.patch(pointer, value),
+            DnsServer::Nifcloud(inner) => inner.patch(pointer, value),
+            DnsServer::Ns1(inner) => inner.patch(pointer, value),
+            DnsServer::OracleCloud(inner) => inner.patch(pointer, value),
+            DnsServer::Plesk(inner) => inner.patch(pointer, value),
+            DnsServer::Safedns(inner) => inner.patch(pointer, value),
+            DnsServer::Scaleway(inner) => inner.patch(pointer, value),
+            DnsServer::TencentCloud(inner) => inner.patch(pointer, value),
+            DnsServer::Transip(inner) => inner.patch(pointer, value),
+            DnsServer::UltraDns(inner) => inner.patch(pointer, value),
+            DnsServer::Vercel(inner) => inner.patch(pointer, value),
+            DnsServer::Volcengine(inner) => inner.patch(pointer, value),
+            DnsServer::Vultr(inner) => inner.patch(pointer, value),
+            DnsServer::WebSupport(inner) => inner.patch(pointer, value),
+            DnsServer::YandexCloud(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -10472,7 +11550,7 @@ impl DnsServer {
     pub fn object_type(&self) -> DnsServerType {
         match self {
             DnsServer::Tsig(_) => DnsServerType::Tsig,
-            DnsServer::Sig0(_) => DnsServerType::Sig0,
+            DnsServer::Deprecated1 => DnsServerType::Deprecated1,
             DnsServer::Cloudflare(_) => DnsServerType::Cloudflare,
             DnsServer::DigitalOcean(_) => DnsServerType::DigitalOcean,
             DnsServer::DeSEC(_) => DnsServerType::DeSEC,
@@ -10483,6 +11561,821 @@ impl DnsServer {
             DnsServer::Spaceship(_) => DnsServerType::Spaceship,
             DnsServer::Route53(_) => DnsServerType::Route53,
             DnsServer::GoogleCloudDns(_) => DnsServerType::GoogleCloudDns,
+            DnsServer::Alidns(_) => DnsServerType::Alidns,
+            DnsServer::ArvanCloud(_) => DnsServerType::ArvanCloud,
+            DnsServer::Autodns(_) => DnsServerType::Autodns,
+            DnsServer::AzureDns(_) => DnsServerType::AzureDns,
+            DnsServer::BaiduCloud(_) => DnsServerType::BaiduCloud,
+            DnsServer::BluecatV2(_) => DnsServerType::BluecatV2,
+            DnsServer::ClouDns(_) => DnsServerType::ClouDns,
+            DnsServer::Constellix(_) => DnsServerType::Constellix,
+            DnsServer::Cpanel(_) => DnsServerType::Cpanel,
+            DnsServer::Ddnss(_) => DnsServerType::Ddnss,
+            DnsServer::DnsMadeEasy(_) => DnsServerType::DnsMadeEasy,
+            DnsServer::Domeneshop(_) => DnsServerType::Domeneshop,
+            DnsServer::Dreamhost(_) => DnsServerType::Dreamhost,
+            DnsServer::DuckDns(_) => DnsServerType::DuckDns,
+            DnsServer::Dynu(_) => DnsServerType::Dynu,
+            DnsServer::EasyDns(_) => DnsServerType::EasyDns,
+            DnsServer::EdgeDns(_) => DnsServerType::EdgeDns,
+            DnsServer::Exoscale(_) => DnsServerType::Exoscale,
+            DnsServer::FreeMyIp(_) => DnsServerType::FreeMyIp,
+            DnsServer::GandiV5(_) => DnsServerType::GandiV5,
+            DnsServer::Gcore(_) => DnsServerType::Gcore,
+            DnsServer::Glesys(_) => DnsServerType::Glesys,
+            DnsServer::Godaddy(_) => DnsServerType::Godaddy,
+            DnsServer::Hetzner(_) => DnsServerType::Hetzner,
+            DnsServer::HostingDe(_) => DnsServerType::HostingDe,
+            DnsServer::Hostinger(_) => DnsServerType::Hostinger,
+            DnsServer::HuaweiCloud(_) => DnsServerType::HuaweiCloud,
+            DnsServer::Hurricane(_) => DnsServerType::Hurricane,
+            DnsServer::IbmCloud(_) => DnsServerType::IbmCloud,
+            DnsServer::Infoblox(_) => DnsServerType::Infoblox,
+            DnsServer::Infomaniak(_) => DnsServerType::Infomaniak,
+            DnsServer::Inwx(_) => DnsServerType::Inwx,
+            DnsServer::Ionos(_) => DnsServerType::Ionos,
+            DnsServer::Ipv64(_) => DnsServerType::Ipv64,
+            DnsServer::Joker(_) => DnsServerType::Joker,
+            DnsServer::Lightsail(_) => DnsServerType::Lightsail,
+            DnsServer::Linode(_) => DnsServerType::Linode,
+            DnsServer::LuaDns(_) => DnsServerType::LuaDns,
+            DnsServer::MythicBeasts(_) => DnsServerType::MythicBeasts,
+            DnsServer::Namecheap(_) => DnsServerType::Namecheap,
+            DnsServer::NameDotCom(_) => DnsServerType::NameDotCom,
+            DnsServer::NameSilo(_) => DnsServerType::NameSilo,
+            DnsServer::Netcup(_) => DnsServerType::Netcup,
+            DnsServer::Netlify(_) => DnsServerType::Netlify,
+            DnsServer::Nifcloud(_) => DnsServerType::Nifcloud,
+            DnsServer::Ns1(_) => DnsServerType::Ns1,
+            DnsServer::OracleCloud(_) => DnsServerType::OracleCloud,
+            DnsServer::Plesk(_) => DnsServerType::Plesk,
+            DnsServer::Safedns(_) => DnsServerType::Safedns,
+            DnsServer::Scaleway(_) => DnsServerType::Scaleway,
+            DnsServer::TencentCloud(_) => DnsServerType::TencentCloud,
+            DnsServer::Transip(_) => DnsServerType::Transip,
+            DnsServer::UltraDns(_) => DnsServerType::UltraDns,
+            DnsServer::Vercel(_) => DnsServerType::Vercel,
+            DnsServer::Volcengine(_) => DnsServerType::Volcengine,
+            DnsServer::Vultr(_) => DnsServerType::Vultr,
+            DnsServer::WebSupport(_) => DnsServerType::WebSupport,
+            DnsServer::YandexCloud(_) => DnsServerType::YandexCloud,
+        }
+    }
+}
+
+impl DnsServerAlidns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        if let Some(value) = &self.region {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Region));
+            }
+        }
+        let value = &self.security_token;
+        value.validate(errors);
+        if let Some(value) = &self.line {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Line));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerAlidns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.region.pickle(out);
+        self.security_token.pickle(out);
+        self.line.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.security_token = Pickle::unpickle(stream)?;
+        this.line = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerAlidns {
+    fn default() -> Self {
+        Self {
+            access_key: Default::default(),
+            secret_key: Default::default(),
+            region: Default::default(),
+            security_token: Default::default(),
+            line: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerAlidns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(14);
+        map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(Property::SecurityToken, self.security_token.into_value());
+        map.insert_unchecked(Property::Line, self.line.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerAlidns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKey) => self
+                .access_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecurityToken) => self.security_token.patch(pointer, value),
+            Some(Property::Line) => self
+                .line
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerAutodns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerAutodns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.context.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.context = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerAutodns {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            password: Default::default(),
+            context: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerAutodns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::Context, self.context.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerAutodns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::Context) => self.context.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerAzureDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.tenant_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::TenantId));
+        }
+        let value = &self.client_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ClientId));
+        }
+        let value = &self.client_secret;
+        value.validate(errors);
+        let value = &self.subscription_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::SubscriptionId));
+        }
+        let value = &self.resource_group;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ResourceGroup));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerAzureDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.tenant_id.pickle(out);
+        self.client_id.pickle(out);
+        self.client_secret.pickle(out);
+        self.subscription_id.pickle(out);
+        self.resource_group.pickle(out);
+        self.environment.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.tenant_id = Pickle::unpickle(stream)?;
+        this.client_id = Pickle::unpickle(stream)?;
+        this.client_secret = Pickle::unpickle(stream)?;
+        this.subscription_id = Pickle::unpickle(stream)?;
+        this.resource_group = Pickle::unpickle(stream)?;
+        this.environment = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerAzureDns {
+    fn default() -> Self {
+        Self {
+            tenant_id: Default::default(),
+            client_id: Default::default(),
+            client_secret: Default::default(),
+            subscription_id: Default::default(),
+            resource_group: Default::default(),
+            environment: AzureEnvironment::Public,
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerAzureDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(15);
+        map.insert_unchecked(Property::TenantId, self.tenant_id.into_value());
+        map.insert_unchecked(Property::ClientId, self.client_id.into_value());
+        map.insert_unchecked(Property::ClientSecret, self.client_secret.into_value());
+        map.insert_unchecked(Property::SubscriptionId, self.subscription_id.into_value());
+        map.insert_unchecked(Property::ResourceGroup, self.resource_group.into_value());
+        map.insert_unchecked(Property::Environment, self.environment.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerAzureDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::TenantId) => self
+                .tenant_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ClientId) => self
+                .client_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ClientSecret) => self.client_secret.patch(pointer, value),
+            Some(Property::SubscriptionId) => self
+                .subscription_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ResourceGroup) => self
+                .resource_group
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Environment) => self.environment.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerBaiduCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerBaiduCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerBaiduCloud {
+    fn default() -> Self {
+        Self {
+            access_key: Default::default(),
+            secret_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerBaiduCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerBaiduCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKey) => self
+                .access_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerBluecatV2 {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.base_url;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::BaseUrl));
+        }
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.config_name;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ConfigName));
+        }
+        let value = &self.view_name;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ViewName));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerBluecatV2 {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.base_url.pickle(out);
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.config_name.pickle(out);
+        self.view_name.pickle(out);
+        self.skip_deploy.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.base_url = Pickle::unpickle(stream)?;
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.config_name = Pickle::unpickle(stream)?;
+        this.view_name = Pickle::unpickle(stream)?;
+        this.skip_deploy = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerBluecatV2 {
+    fn default() -> Self {
+        Self {
+            base_url: Default::default(),
+            username: Default::default(),
+            password: Default::default(),
+            config_name: Default::default(),
+            view_name: Default::default(),
+            skip_deploy: false,
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerBluecatV2 {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(15);
+        map.insert_unchecked(Property::BaseUrl, self.base_url.into_value());
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::ConfigName, self.config_name.into_value());
+        map.insert_unchecked(Property::ViewName, self.view_name.into_value());
+        map.insert_unchecked(Property::SkipDeploy, self.skip_deploy.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerBluecatV2 {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::BaseUrl) => self
+                .base_url
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::ConfigName) => self
+                .config_name
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ViewName) => self
+                .view_name
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SkipDeploy) => self.skip_deploy.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
         }
     }
 }
@@ -10492,7 +12385,7 @@ impl DnsServerBootstrap {
         match self {
             DnsServerBootstrap::Manual => true,
             DnsServerBootstrap::Tsig(inner) => inner.validate(errors),
-            DnsServerBootstrap::Sig0(inner) => inner.validate(errors),
+            DnsServerBootstrap::Deprecated1 => true,
             DnsServerBootstrap::Cloudflare(inner) => inner.validate(errors),
             DnsServerBootstrap::DigitalOcean(inner) => inner.validate(errors),
             DnsServerBootstrap::DeSEC(inner) => inner.validate(errors),
@@ -10503,6 +12396,64 @@ impl DnsServerBootstrap {
             DnsServerBootstrap::Spaceship(inner) => inner.validate(errors),
             DnsServerBootstrap::Route53(inner) => inner.validate(errors),
             DnsServerBootstrap::GoogleCloudDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Alidns(inner) => inner.validate(errors),
+            DnsServerBootstrap::ArvanCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Autodns(inner) => inner.validate(errors),
+            DnsServerBootstrap::AzureDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::BaiduCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::BluecatV2(inner) => inner.validate(errors),
+            DnsServerBootstrap::ClouDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Constellix(inner) => inner.validate(errors),
+            DnsServerBootstrap::Cpanel(inner) => inner.validate(errors),
+            DnsServerBootstrap::Ddnss(inner) => inner.validate(errors),
+            DnsServerBootstrap::DnsMadeEasy(inner) => inner.validate(errors),
+            DnsServerBootstrap::Domeneshop(inner) => inner.validate(errors),
+            DnsServerBootstrap::Dreamhost(inner) => inner.validate(errors),
+            DnsServerBootstrap::DuckDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Dynu(inner) => inner.validate(errors),
+            DnsServerBootstrap::EasyDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::EdgeDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Exoscale(inner) => inner.validate(errors),
+            DnsServerBootstrap::FreeMyIp(inner) => inner.validate(errors),
+            DnsServerBootstrap::GandiV5(inner) => inner.validate(errors),
+            DnsServerBootstrap::Gcore(inner) => inner.validate(errors),
+            DnsServerBootstrap::Glesys(inner) => inner.validate(errors),
+            DnsServerBootstrap::Godaddy(inner) => inner.validate(errors),
+            DnsServerBootstrap::Hetzner(inner) => inner.validate(errors),
+            DnsServerBootstrap::HostingDe(inner) => inner.validate(errors),
+            DnsServerBootstrap::Hostinger(inner) => inner.validate(errors),
+            DnsServerBootstrap::HuaweiCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Hurricane(inner) => inner.validate(errors),
+            DnsServerBootstrap::IbmCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Infoblox(inner) => inner.validate(errors),
+            DnsServerBootstrap::Infomaniak(inner) => inner.validate(errors),
+            DnsServerBootstrap::Inwx(inner) => inner.validate(errors),
+            DnsServerBootstrap::Ionos(inner) => inner.validate(errors),
+            DnsServerBootstrap::Ipv64(inner) => inner.validate(errors),
+            DnsServerBootstrap::Joker(inner) => inner.validate(errors),
+            DnsServerBootstrap::Lightsail(inner) => inner.validate(errors),
+            DnsServerBootstrap::Linode(inner) => inner.validate(errors),
+            DnsServerBootstrap::LuaDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::MythicBeasts(inner) => inner.validate(errors),
+            DnsServerBootstrap::Namecheap(inner) => inner.validate(errors),
+            DnsServerBootstrap::NameDotCom(inner) => inner.validate(errors),
+            DnsServerBootstrap::NameSilo(inner) => inner.validate(errors),
+            DnsServerBootstrap::Netcup(inner) => inner.validate(errors),
+            DnsServerBootstrap::Netlify(inner) => inner.validate(errors),
+            DnsServerBootstrap::Nifcloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Ns1(inner) => inner.validate(errors),
+            DnsServerBootstrap::OracleCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Plesk(inner) => inner.validate(errors),
+            DnsServerBootstrap::Safedns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Scaleway(inner) => inner.validate(errors),
+            DnsServerBootstrap::TencentCloud(inner) => inner.validate(errors),
+            DnsServerBootstrap::Transip(inner) => inner.validate(errors),
+            DnsServerBootstrap::UltraDns(inner) => inner.validate(errors),
+            DnsServerBootstrap::Vercel(inner) => inner.validate(errors),
+            DnsServerBootstrap::Volcengine(inner) => inner.validate(errors),
+            DnsServerBootstrap::Vultr(inner) => inner.validate(errors),
+            DnsServerBootstrap::WebSupport(inner) => inner.validate(errors),
+            DnsServerBootstrap::YandexCloud(inner) => inner.validate(errors),
         }
     }
 }
@@ -10523,9 +12474,8 @@ impl Pickle for DnsServerBootstrap {
                 1u16.pickle(out);
                 inner.pickle(out);
             }
-            DnsServerBootstrap::Sig0(inner) => {
+            DnsServerBootstrap::Deprecated1 => {
                 2u16.pickle(out);
-                inner.pickle(out);
             }
             DnsServerBootstrap::Cloudflare(inner) => {
                 3u16.pickle(out);
@@ -10567,6 +12517,238 @@ impl Pickle for DnsServerBootstrap {
                 12u16.pickle(out);
                 inner.pickle(out);
             }
+            DnsServerBootstrap::Alidns(inner) => {
+                13u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::ArvanCloud(inner) => {
+                14u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Autodns(inner) => {
+                15u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::AzureDns(inner) => {
+                16u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::BaiduCloud(inner) => {
+                17u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::BluecatV2(inner) => {
+                18u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::ClouDns(inner) => {
+                19u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Constellix(inner) => {
+                20u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Cpanel(inner) => {
+                21u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Ddnss(inner) => {
+                22u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::DnsMadeEasy(inner) => {
+                23u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Domeneshop(inner) => {
+                24u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Dreamhost(inner) => {
+                25u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::DuckDns(inner) => {
+                26u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Dynu(inner) => {
+                27u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::EasyDns(inner) => {
+                28u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::EdgeDns(inner) => {
+                29u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Exoscale(inner) => {
+                30u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::FreeMyIp(inner) => {
+                31u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::GandiV5(inner) => {
+                32u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Gcore(inner) => {
+                33u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Glesys(inner) => {
+                34u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Godaddy(inner) => {
+                35u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Hetzner(inner) => {
+                36u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::HostingDe(inner) => {
+                37u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Hostinger(inner) => {
+                38u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::HuaweiCloud(inner) => {
+                39u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Hurricane(inner) => {
+                40u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::IbmCloud(inner) => {
+                41u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Infoblox(inner) => {
+                42u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Infomaniak(inner) => {
+                43u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Inwx(inner) => {
+                44u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Ionos(inner) => {
+                45u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Ipv64(inner) => {
+                46u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Joker(inner) => {
+                47u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Lightsail(inner) => {
+                48u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Linode(inner) => {
+                49u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::LuaDns(inner) => {
+                50u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::MythicBeasts(inner) => {
+                51u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Namecheap(inner) => {
+                52u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::NameDotCom(inner) => {
+                53u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::NameSilo(inner) => {
+                54u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Netcup(inner) => {
+                55u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Netlify(inner) => {
+                56u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Nifcloud(inner) => {
+                57u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Ns1(inner) => {
+                58u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::OracleCloud(inner) => {
+                59u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Plesk(inner) => {
+                60u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Safedns(inner) => {
+                61u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Scaleway(inner) => {
+                62u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::TencentCloud(inner) => {
+                63u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Transip(inner) => {
+                64u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::UltraDns(inner) => {
+                65u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Vercel(inner) => {
+                66u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Volcengine(inner) => {
+                67u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::Vultr(inner) => {
+                68u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::WebSupport(inner) => {
+                69u16.pickle(out);
+                inner.pickle(out);
+            }
+            DnsServerBootstrap::YandexCloud(inner) => {
+                70u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -10574,7 +12756,7 @@ impl Pickle for DnsServerBootstrap {
         match u16::unpickle(stream)? {
             0 => Some(DnsServerBootstrap::Manual),
             1 => Pickle::unpickle(stream).map(DnsServerBootstrap::Tsig),
-            2 => Pickle::unpickle(stream).map(DnsServerBootstrap::Sig0),
+            2 => Some(DnsServerBootstrap::Deprecated1),
             3 => Pickle::unpickle(stream).map(DnsServerBootstrap::Cloudflare),
             4 => Pickle::unpickle(stream).map(DnsServerBootstrap::DigitalOcean),
             5 => Pickle::unpickle(stream).map(DnsServerBootstrap::DeSEC),
@@ -10585,6 +12767,64 @@ impl Pickle for DnsServerBootstrap {
             10 => Pickle::unpickle(stream).map(DnsServerBootstrap::Spaceship),
             11 => Pickle::unpickle(stream).map(DnsServerBootstrap::Route53),
             12 => Pickle::unpickle(stream).map(DnsServerBootstrap::GoogleCloudDns),
+            13 => Pickle::unpickle(stream).map(DnsServerBootstrap::Alidns),
+            14 => Pickle::unpickle(stream).map(DnsServerBootstrap::ArvanCloud),
+            15 => Pickle::unpickle(stream).map(DnsServerBootstrap::Autodns),
+            16 => Pickle::unpickle(stream).map(DnsServerBootstrap::AzureDns),
+            17 => Pickle::unpickle(stream).map(DnsServerBootstrap::BaiduCloud),
+            18 => Pickle::unpickle(stream).map(DnsServerBootstrap::BluecatV2),
+            19 => Pickle::unpickle(stream).map(DnsServerBootstrap::ClouDns),
+            20 => Pickle::unpickle(stream).map(DnsServerBootstrap::Constellix),
+            21 => Pickle::unpickle(stream).map(DnsServerBootstrap::Cpanel),
+            22 => Pickle::unpickle(stream).map(DnsServerBootstrap::Ddnss),
+            23 => Pickle::unpickle(stream).map(DnsServerBootstrap::DnsMadeEasy),
+            24 => Pickle::unpickle(stream).map(DnsServerBootstrap::Domeneshop),
+            25 => Pickle::unpickle(stream).map(DnsServerBootstrap::Dreamhost),
+            26 => Pickle::unpickle(stream).map(DnsServerBootstrap::DuckDns),
+            27 => Pickle::unpickle(stream).map(DnsServerBootstrap::Dynu),
+            28 => Pickle::unpickle(stream).map(DnsServerBootstrap::EasyDns),
+            29 => Pickle::unpickle(stream).map(DnsServerBootstrap::EdgeDns),
+            30 => Pickle::unpickle(stream).map(DnsServerBootstrap::Exoscale),
+            31 => Pickle::unpickle(stream).map(DnsServerBootstrap::FreeMyIp),
+            32 => Pickle::unpickle(stream).map(DnsServerBootstrap::GandiV5),
+            33 => Pickle::unpickle(stream).map(DnsServerBootstrap::Gcore),
+            34 => Pickle::unpickle(stream).map(DnsServerBootstrap::Glesys),
+            35 => Pickle::unpickle(stream).map(DnsServerBootstrap::Godaddy),
+            36 => Pickle::unpickle(stream).map(DnsServerBootstrap::Hetzner),
+            37 => Pickle::unpickle(stream).map(DnsServerBootstrap::HostingDe),
+            38 => Pickle::unpickle(stream).map(DnsServerBootstrap::Hostinger),
+            39 => Pickle::unpickle(stream).map(DnsServerBootstrap::HuaweiCloud),
+            40 => Pickle::unpickle(stream).map(DnsServerBootstrap::Hurricane),
+            41 => Pickle::unpickle(stream).map(DnsServerBootstrap::IbmCloud),
+            42 => Pickle::unpickle(stream).map(DnsServerBootstrap::Infoblox),
+            43 => Pickle::unpickle(stream).map(DnsServerBootstrap::Infomaniak),
+            44 => Pickle::unpickle(stream).map(DnsServerBootstrap::Inwx),
+            45 => Pickle::unpickle(stream).map(DnsServerBootstrap::Ionos),
+            46 => Pickle::unpickle(stream).map(DnsServerBootstrap::Ipv64),
+            47 => Pickle::unpickle(stream).map(DnsServerBootstrap::Joker),
+            48 => Pickle::unpickle(stream).map(DnsServerBootstrap::Lightsail),
+            49 => Pickle::unpickle(stream).map(DnsServerBootstrap::Linode),
+            50 => Pickle::unpickle(stream).map(DnsServerBootstrap::LuaDns),
+            51 => Pickle::unpickle(stream).map(DnsServerBootstrap::MythicBeasts),
+            52 => Pickle::unpickle(stream).map(DnsServerBootstrap::Namecheap),
+            53 => Pickle::unpickle(stream).map(DnsServerBootstrap::NameDotCom),
+            54 => Pickle::unpickle(stream).map(DnsServerBootstrap::NameSilo),
+            55 => Pickle::unpickle(stream).map(DnsServerBootstrap::Netcup),
+            56 => Pickle::unpickle(stream).map(DnsServerBootstrap::Netlify),
+            57 => Pickle::unpickle(stream).map(DnsServerBootstrap::Nifcloud),
+            58 => Pickle::unpickle(stream).map(DnsServerBootstrap::Ns1),
+            59 => Pickle::unpickle(stream).map(DnsServerBootstrap::OracleCloud),
+            60 => Pickle::unpickle(stream).map(DnsServerBootstrap::Plesk),
+            61 => Pickle::unpickle(stream).map(DnsServerBootstrap::Safedns),
+            62 => Pickle::unpickle(stream).map(DnsServerBootstrap::Scaleway),
+            63 => Pickle::unpickle(stream).map(DnsServerBootstrap::TencentCloud),
+            64 => Pickle::unpickle(stream).map(DnsServerBootstrap::Transip),
+            65 => Pickle::unpickle(stream).map(DnsServerBootstrap::UltraDns),
+            66 => Pickle::unpickle(stream).map(DnsServerBootstrap::Vercel),
+            67 => Pickle::unpickle(stream).map(DnsServerBootstrap::Volcengine),
+            68 => Pickle::unpickle(stream).map(DnsServerBootstrap::Vultr),
+            69 => Pickle::unpickle(stream).map(DnsServerBootstrap::WebSupport),
+            70 => Pickle::unpickle(stream).map(DnsServerBootstrap::YandexCloud),
             _ => None,
         }
     }
@@ -10605,12 +12845,10 @@ impl IntoValue for DnsServerBootstrap {
                     .insert_unchecked(Property::Type, JmapValue::Str("Tsig".into()));
                 obj
             }
-            DnsServerBootstrap::Sig0(obj) => {
-                let mut obj = obj.into_value();
-                obj.as_object_mut()
-                    .unwrap()
-                    .insert_unchecked(Property::Type, JmapValue::Str("Sig0".into()));
-                obj
+            DnsServerBootstrap::Deprecated1 => {
+                let mut obj = jmap_tools::Map::new();
+                obj.insert_unchecked(Property::Type, JmapValue::Str("Deprecated1".into()));
+                JmapValue::Object(obj)
             }
             DnsServerBootstrap::Cloudflare(obj) => {
                 let mut obj = obj.into_value();
@@ -10682,6 +12920,412 @@ impl IntoValue for DnsServerBootstrap {
                     .insert_unchecked(Property::Type, JmapValue::Str("GoogleCloudDns".into()));
                 obj
             }
+            DnsServerBootstrap::Alidns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Alidns".into()));
+                obj
+            }
+            DnsServerBootstrap::ArvanCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ArvanCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Autodns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Autodns".into()));
+                obj
+            }
+            DnsServerBootstrap::AzureDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("AzureDns".into()));
+                obj
+            }
+            DnsServerBootstrap::BaiduCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("BaiduCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::BluecatV2(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("BluecatV2".into()));
+                obj
+            }
+            DnsServerBootstrap::ClouDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ClouDns".into()));
+                obj
+            }
+            DnsServerBootstrap::Constellix(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Constellix".into()));
+                obj
+            }
+            DnsServerBootstrap::Cpanel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Cpanel".into()));
+                obj
+            }
+            DnsServerBootstrap::Ddnss(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ddnss".into()));
+                obj
+            }
+            DnsServerBootstrap::DnsMadeEasy(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("DnsMadeEasy".into()));
+                obj
+            }
+            DnsServerBootstrap::Domeneshop(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Domeneshop".into()));
+                obj
+            }
+            DnsServerBootstrap::Dreamhost(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Dreamhost".into()));
+                obj
+            }
+            DnsServerBootstrap::DuckDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("DuckDns".into()));
+                obj
+            }
+            DnsServerBootstrap::Dynu(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Dynu".into()));
+                obj
+            }
+            DnsServerBootstrap::EasyDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("EasyDns".into()));
+                obj
+            }
+            DnsServerBootstrap::EdgeDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("EdgeDns".into()));
+                obj
+            }
+            DnsServerBootstrap::Exoscale(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Exoscale".into()));
+                obj
+            }
+            DnsServerBootstrap::FreeMyIp(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("FreeMyIp".into()));
+                obj
+            }
+            DnsServerBootstrap::GandiV5(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("GandiV5".into()));
+                obj
+            }
+            DnsServerBootstrap::Gcore(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Gcore".into()));
+                obj
+            }
+            DnsServerBootstrap::Glesys(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Glesys".into()));
+                obj
+            }
+            DnsServerBootstrap::Godaddy(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Godaddy".into()));
+                obj
+            }
+            DnsServerBootstrap::Hetzner(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hetzner".into()));
+                obj
+            }
+            DnsServerBootstrap::HostingDe(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("HostingDe".into()));
+                obj
+            }
+            DnsServerBootstrap::Hostinger(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hostinger".into()));
+                obj
+            }
+            DnsServerBootstrap::HuaweiCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("HuaweiCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Hurricane(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Hurricane".into()));
+                obj
+            }
+            DnsServerBootstrap::IbmCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("IbmCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Infoblox(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Infoblox".into()));
+                obj
+            }
+            DnsServerBootstrap::Infomaniak(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Infomaniak".into()));
+                obj
+            }
+            DnsServerBootstrap::Inwx(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Inwx".into()));
+                obj
+            }
+            DnsServerBootstrap::Ionos(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ionos".into()));
+                obj
+            }
+            DnsServerBootstrap::Ipv64(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ipv64".into()));
+                obj
+            }
+            DnsServerBootstrap::Joker(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Joker".into()));
+                obj
+            }
+            DnsServerBootstrap::Lightsail(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Lightsail".into()));
+                obj
+            }
+            DnsServerBootstrap::Linode(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Linode".into()));
+                obj
+            }
+            DnsServerBootstrap::LuaDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("LuaDns".into()));
+                obj
+            }
+            DnsServerBootstrap::MythicBeasts(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("MythicBeasts".into()));
+                obj
+            }
+            DnsServerBootstrap::Namecheap(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Namecheap".into()));
+                obj
+            }
+            DnsServerBootstrap::NameDotCom(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("NameDotCom".into()));
+                obj
+            }
+            DnsServerBootstrap::NameSilo(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("NameSilo".into()));
+                obj
+            }
+            DnsServerBootstrap::Netcup(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Netcup".into()));
+                obj
+            }
+            DnsServerBootstrap::Netlify(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Netlify".into()));
+                obj
+            }
+            DnsServerBootstrap::Nifcloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Nifcloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Ns1(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Ns1".into()));
+                obj
+            }
+            DnsServerBootstrap::OracleCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("OracleCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Plesk(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Plesk".into()));
+                obj
+            }
+            DnsServerBootstrap::Safedns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Safedns".into()));
+                obj
+            }
+            DnsServerBootstrap::Scaleway(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Scaleway".into()));
+                obj
+            }
+            DnsServerBootstrap::TencentCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("TencentCloud".into()));
+                obj
+            }
+            DnsServerBootstrap::Transip(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Transip".into()));
+                obj
+            }
+            DnsServerBootstrap::UltraDns(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("UltraDns".into()));
+                obj
+            }
+            DnsServerBootstrap::Vercel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Vercel".into()));
+                obj
+            }
+            DnsServerBootstrap::Volcengine(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Volcengine".into()));
+                obj
+            }
+            DnsServerBootstrap::Vultr(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Vultr".into()));
+                obj
+            }
+            DnsServerBootstrap::WebSupport(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("WebSupport".into()));
+                obj
+            }
+            DnsServerBootstrap::YandexCloud(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("YandexCloud".into()));
+                obj
+            }
         }
     }
 }
@@ -10698,9 +13342,7 @@ impl RegistryJsonPatch for DnsServerBootstrap {
                 DnsServerBootstrapType::Tsig => {
                     *self = DnsServerBootstrap::Tsig(Default::default())
                 }
-                DnsServerBootstrapType::Sig0 => {
-                    *self = DnsServerBootstrap::Sig0(Default::default())
-                }
+                DnsServerBootstrapType::Deprecated1 => *self = DnsServerBootstrap::Deprecated1,
                 DnsServerBootstrapType::Cloudflare => {
                     *self = DnsServerBootstrap::Cloudflare(Default::default())
                 }
@@ -10729,12 +13371,184 @@ impl RegistryJsonPatch for DnsServerBootstrap {
                 DnsServerBootstrapType::GoogleCloudDns => {
                     *self = DnsServerBootstrap::GoogleCloudDns(Default::default())
                 }
+                DnsServerBootstrapType::Alidns => {
+                    *self = DnsServerBootstrap::Alidns(Default::default())
+                }
+                DnsServerBootstrapType::ArvanCloud => {
+                    *self = DnsServerBootstrap::ArvanCloud(Default::default())
+                }
+                DnsServerBootstrapType::Autodns => {
+                    *self = DnsServerBootstrap::Autodns(Default::default())
+                }
+                DnsServerBootstrapType::AzureDns => {
+                    *self = DnsServerBootstrap::AzureDns(Default::default())
+                }
+                DnsServerBootstrapType::BaiduCloud => {
+                    *self = DnsServerBootstrap::BaiduCloud(Default::default())
+                }
+                DnsServerBootstrapType::BluecatV2 => {
+                    *self = DnsServerBootstrap::BluecatV2(Default::default())
+                }
+                DnsServerBootstrapType::ClouDns => {
+                    *self = DnsServerBootstrap::ClouDns(Default::default())
+                }
+                DnsServerBootstrapType::Constellix => {
+                    *self = DnsServerBootstrap::Constellix(Default::default())
+                }
+                DnsServerBootstrapType::Cpanel => {
+                    *self = DnsServerBootstrap::Cpanel(Default::default())
+                }
+                DnsServerBootstrapType::Ddnss => {
+                    *self = DnsServerBootstrap::Ddnss(Default::default())
+                }
+                DnsServerBootstrapType::DnsMadeEasy => {
+                    *self = DnsServerBootstrap::DnsMadeEasy(Default::default())
+                }
+                DnsServerBootstrapType::Domeneshop => {
+                    *self = DnsServerBootstrap::Domeneshop(Default::default())
+                }
+                DnsServerBootstrapType::Dreamhost => {
+                    *self = DnsServerBootstrap::Dreamhost(Default::default())
+                }
+                DnsServerBootstrapType::DuckDns => {
+                    *self = DnsServerBootstrap::DuckDns(Default::default())
+                }
+                DnsServerBootstrapType::Dynu => {
+                    *self = DnsServerBootstrap::Dynu(Default::default())
+                }
+                DnsServerBootstrapType::EasyDns => {
+                    *self = DnsServerBootstrap::EasyDns(Default::default())
+                }
+                DnsServerBootstrapType::EdgeDns => {
+                    *self = DnsServerBootstrap::EdgeDns(Default::default())
+                }
+                DnsServerBootstrapType::Exoscale => {
+                    *self = DnsServerBootstrap::Exoscale(Default::default())
+                }
+                DnsServerBootstrapType::FreeMyIp => {
+                    *self = DnsServerBootstrap::FreeMyIp(Default::default())
+                }
+                DnsServerBootstrapType::GandiV5 => {
+                    *self = DnsServerBootstrap::GandiV5(Default::default())
+                }
+                DnsServerBootstrapType::Gcore => {
+                    *self = DnsServerBootstrap::Gcore(Default::default())
+                }
+                DnsServerBootstrapType::Glesys => {
+                    *self = DnsServerBootstrap::Glesys(Default::default())
+                }
+                DnsServerBootstrapType::Godaddy => {
+                    *self = DnsServerBootstrap::Godaddy(Default::default())
+                }
+                DnsServerBootstrapType::Hetzner => {
+                    *self = DnsServerBootstrap::Hetzner(Default::default())
+                }
+                DnsServerBootstrapType::HostingDe => {
+                    *self = DnsServerBootstrap::HostingDe(Default::default())
+                }
+                DnsServerBootstrapType::Hostinger => {
+                    *self = DnsServerBootstrap::Hostinger(Default::default())
+                }
+                DnsServerBootstrapType::HuaweiCloud => {
+                    *self = DnsServerBootstrap::HuaweiCloud(Default::default())
+                }
+                DnsServerBootstrapType::Hurricane => {
+                    *self = DnsServerBootstrap::Hurricane(Default::default())
+                }
+                DnsServerBootstrapType::IbmCloud => {
+                    *self = DnsServerBootstrap::IbmCloud(Default::default())
+                }
+                DnsServerBootstrapType::Infoblox => {
+                    *self = DnsServerBootstrap::Infoblox(Default::default())
+                }
+                DnsServerBootstrapType::Infomaniak => {
+                    *self = DnsServerBootstrap::Infomaniak(Default::default())
+                }
+                DnsServerBootstrapType::Inwx => {
+                    *self = DnsServerBootstrap::Inwx(Default::default())
+                }
+                DnsServerBootstrapType::Ionos => {
+                    *self = DnsServerBootstrap::Ionos(Default::default())
+                }
+                DnsServerBootstrapType::Ipv64 => {
+                    *self = DnsServerBootstrap::Ipv64(Default::default())
+                }
+                DnsServerBootstrapType::Joker => {
+                    *self = DnsServerBootstrap::Joker(Default::default())
+                }
+                DnsServerBootstrapType::Lightsail => {
+                    *self = DnsServerBootstrap::Lightsail(Default::default())
+                }
+                DnsServerBootstrapType::Linode => {
+                    *self = DnsServerBootstrap::Linode(Default::default())
+                }
+                DnsServerBootstrapType::LuaDns => {
+                    *self = DnsServerBootstrap::LuaDns(Default::default())
+                }
+                DnsServerBootstrapType::MythicBeasts => {
+                    *self = DnsServerBootstrap::MythicBeasts(Default::default())
+                }
+                DnsServerBootstrapType::Namecheap => {
+                    *self = DnsServerBootstrap::Namecheap(Default::default())
+                }
+                DnsServerBootstrapType::NameDotCom => {
+                    *self = DnsServerBootstrap::NameDotCom(Default::default())
+                }
+                DnsServerBootstrapType::NameSilo => {
+                    *self = DnsServerBootstrap::NameSilo(Default::default())
+                }
+                DnsServerBootstrapType::Netcup => {
+                    *self = DnsServerBootstrap::Netcup(Default::default())
+                }
+                DnsServerBootstrapType::Netlify => {
+                    *self = DnsServerBootstrap::Netlify(Default::default())
+                }
+                DnsServerBootstrapType::Nifcloud => {
+                    *self = DnsServerBootstrap::Nifcloud(Default::default())
+                }
+                DnsServerBootstrapType::Ns1 => *self = DnsServerBootstrap::Ns1(Default::default()),
+                DnsServerBootstrapType::OracleCloud => {
+                    *self = DnsServerBootstrap::OracleCloud(Default::default())
+                }
+                DnsServerBootstrapType::Plesk => {
+                    *self = DnsServerBootstrap::Plesk(Default::default())
+                }
+                DnsServerBootstrapType::Safedns => {
+                    *self = DnsServerBootstrap::Safedns(Default::default())
+                }
+                DnsServerBootstrapType::Scaleway => {
+                    *self = DnsServerBootstrap::Scaleway(Default::default())
+                }
+                DnsServerBootstrapType::TencentCloud => {
+                    *self = DnsServerBootstrap::TencentCloud(Default::default())
+                }
+                DnsServerBootstrapType::Transip => {
+                    *self = DnsServerBootstrap::Transip(Default::default())
+                }
+                DnsServerBootstrapType::UltraDns => {
+                    *self = DnsServerBootstrap::UltraDns(Default::default())
+                }
+                DnsServerBootstrapType::Vercel => {
+                    *self = DnsServerBootstrap::Vercel(Default::default())
+                }
+                DnsServerBootstrapType::Volcengine => {
+                    *self = DnsServerBootstrap::Volcengine(Default::default())
+                }
+                DnsServerBootstrapType::Vultr => {
+                    *self = DnsServerBootstrap::Vultr(Default::default())
+                }
+                DnsServerBootstrapType::WebSupport => {
+                    *self = DnsServerBootstrap::WebSupport(Default::default())
+                }
+                DnsServerBootstrapType::YandexCloud => {
+                    *self = DnsServerBootstrap::YandexCloud(Default::default())
+                }
             }
         }
         match self {
             DnsServerBootstrap::Manual => pointer.assert_eof(),
             DnsServerBootstrap::Tsig(inner) => inner.patch(pointer, value),
-            DnsServerBootstrap::Sig0(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Deprecated1 => pointer.assert_eof(),
             DnsServerBootstrap::Cloudflare(inner) => inner.patch(pointer, value),
             DnsServerBootstrap::DigitalOcean(inner) => inner.patch(pointer, value),
             DnsServerBootstrap::DeSEC(inner) => inner.patch(pointer, value),
@@ -10745,6 +13559,64 @@ impl RegistryJsonPatch for DnsServerBootstrap {
             DnsServerBootstrap::Spaceship(inner) => inner.patch(pointer, value),
             DnsServerBootstrap::Route53(inner) => inner.patch(pointer, value),
             DnsServerBootstrap::GoogleCloudDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Alidns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::ArvanCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Autodns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::AzureDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::BaiduCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::BluecatV2(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::ClouDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Constellix(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Cpanel(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Ddnss(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::DnsMadeEasy(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Domeneshop(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Dreamhost(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::DuckDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Dynu(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::EasyDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::EdgeDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Exoscale(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::FreeMyIp(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::GandiV5(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Gcore(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Glesys(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Godaddy(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Hetzner(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::HostingDe(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Hostinger(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::HuaweiCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Hurricane(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::IbmCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Infoblox(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Infomaniak(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Inwx(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Ionos(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Ipv64(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Joker(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Lightsail(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Linode(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::LuaDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::MythicBeasts(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Namecheap(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::NameDotCom(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::NameSilo(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Netcup(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Netlify(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Nifcloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Ns1(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::OracleCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Plesk(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Safedns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Scaleway(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::TencentCloud(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Transip(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::UltraDns(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Vercel(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Volcengine(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::Vultr(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::WebSupport(inner) => inner.patch(pointer, value),
+            DnsServerBootstrap::YandexCloud(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -10754,7 +13626,7 @@ impl DnsServerBootstrap {
         match self {
             DnsServerBootstrap::Manual => DnsServerBootstrapType::Manual,
             DnsServerBootstrap::Tsig(_) => DnsServerBootstrapType::Tsig,
-            DnsServerBootstrap::Sig0(_) => DnsServerBootstrapType::Sig0,
+            DnsServerBootstrap::Deprecated1 => DnsServerBootstrapType::Deprecated1,
             DnsServerBootstrap::Cloudflare(_) => DnsServerBootstrapType::Cloudflare,
             DnsServerBootstrap::DigitalOcean(_) => DnsServerBootstrapType::DigitalOcean,
             DnsServerBootstrap::DeSEC(_) => DnsServerBootstrapType::DeSEC,
@@ -10765,6 +13637,206 @@ impl DnsServerBootstrap {
             DnsServerBootstrap::Spaceship(_) => DnsServerBootstrapType::Spaceship,
             DnsServerBootstrap::Route53(_) => DnsServerBootstrapType::Route53,
             DnsServerBootstrap::GoogleCloudDns(_) => DnsServerBootstrapType::GoogleCloudDns,
+            DnsServerBootstrap::Alidns(_) => DnsServerBootstrapType::Alidns,
+            DnsServerBootstrap::ArvanCloud(_) => DnsServerBootstrapType::ArvanCloud,
+            DnsServerBootstrap::Autodns(_) => DnsServerBootstrapType::Autodns,
+            DnsServerBootstrap::AzureDns(_) => DnsServerBootstrapType::AzureDns,
+            DnsServerBootstrap::BaiduCloud(_) => DnsServerBootstrapType::BaiduCloud,
+            DnsServerBootstrap::BluecatV2(_) => DnsServerBootstrapType::BluecatV2,
+            DnsServerBootstrap::ClouDns(_) => DnsServerBootstrapType::ClouDns,
+            DnsServerBootstrap::Constellix(_) => DnsServerBootstrapType::Constellix,
+            DnsServerBootstrap::Cpanel(_) => DnsServerBootstrapType::Cpanel,
+            DnsServerBootstrap::Ddnss(_) => DnsServerBootstrapType::Ddnss,
+            DnsServerBootstrap::DnsMadeEasy(_) => DnsServerBootstrapType::DnsMadeEasy,
+            DnsServerBootstrap::Domeneshop(_) => DnsServerBootstrapType::Domeneshop,
+            DnsServerBootstrap::Dreamhost(_) => DnsServerBootstrapType::Dreamhost,
+            DnsServerBootstrap::DuckDns(_) => DnsServerBootstrapType::DuckDns,
+            DnsServerBootstrap::Dynu(_) => DnsServerBootstrapType::Dynu,
+            DnsServerBootstrap::EasyDns(_) => DnsServerBootstrapType::EasyDns,
+            DnsServerBootstrap::EdgeDns(_) => DnsServerBootstrapType::EdgeDns,
+            DnsServerBootstrap::Exoscale(_) => DnsServerBootstrapType::Exoscale,
+            DnsServerBootstrap::FreeMyIp(_) => DnsServerBootstrapType::FreeMyIp,
+            DnsServerBootstrap::GandiV5(_) => DnsServerBootstrapType::GandiV5,
+            DnsServerBootstrap::Gcore(_) => DnsServerBootstrapType::Gcore,
+            DnsServerBootstrap::Glesys(_) => DnsServerBootstrapType::Glesys,
+            DnsServerBootstrap::Godaddy(_) => DnsServerBootstrapType::Godaddy,
+            DnsServerBootstrap::Hetzner(_) => DnsServerBootstrapType::Hetzner,
+            DnsServerBootstrap::HostingDe(_) => DnsServerBootstrapType::HostingDe,
+            DnsServerBootstrap::Hostinger(_) => DnsServerBootstrapType::Hostinger,
+            DnsServerBootstrap::HuaweiCloud(_) => DnsServerBootstrapType::HuaweiCloud,
+            DnsServerBootstrap::Hurricane(_) => DnsServerBootstrapType::Hurricane,
+            DnsServerBootstrap::IbmCloud(_) => DnsServerBootstrapType::IbmCloud,
+            DnsServerBootstrap::Infoblox(_) => DnsServerBootstrapType::Infoblox,
+            DnsServerBootstrap::Infomaniak(_) => DnsServerBootstrapType::Infomaniak,
+            DnsServerBootstrap::Inwx(_) => DnsServerBootstrapType::Inwx,
+            DnsServerBootstrap::Ionos(_) => DnsServerBootstrapType::Ionos,
+            DnsServerBootstrap::Ipv64(_) => DnsServerBootstrapType::Ipv64,
+            DnsServerBootstrap::Joker(_) => DnsServerBootstrapType::Joker,
+            DnsServerBootstrap::Lightsail(_) => DnsServerBootstrapType::Lightsail,
+            DnsServerBootstrap::Linode(_) => DnsServerBootstrapType::Linode,
+            DnsServerBootstrap::LuaDns(_) => DnsServerBootstrapType::LuaDns,
+            DnsServerBootstrap::MythicBeasts(_) => DnsServerBootstrapType::MythicBeasts,
+            DnsServerBootstrap::Namecheap(_) => DnsServerBootstrapType::Namecheap,
+            DnsServerBootstrap::NameDotCom(_) => DnsServerBootstrapType::NameDotCom,
+            DnsServerBootstrap::NameSilo(_) => DnsServerBootstrapType::NameSilo,
+            DnsServerBootstrap::Netcup(_) => DnsServerBootstrapType::Netcup,
+            DnsServerBootstrap::Netlify(_) => DnsServerBootstrapType::Netlify,
+            DnsServerBootstrap::Nifcloud(_) => DnsServerBootstrapType::Nifcloud,
+            DnsServerBootstrap::Ns1(_) => DnsServerBootstrapType::Ns1,
+            DnsServerBootstrap::OracleCloud(_) => DnsServerBootstrapType::OracleCloud,
+            DnsServerBootstrap::Plesk(_) => DnsServerBootstrapType::Plesk,
+            DnsServerBootstrap::Safedns(_) => DnsServerBootstrapType::Safedns,
+            DnsServerBootstrap::Scaleway(_) => DnsServerBootstrapType::Scaleway,
+            DnsServerBootstrap::TencentCloud(_) => DnsServerBootstrapType::TencentCloud,
+            DnsServerBootstrap::Transip(_) => DnsServerBootstrapType::Transip,
+            DnsServerBootstrap::UltraDns(_) => DnsServerBootstrapType::UltraDns,
+            DnsServerBootstrap::Vercel(_) => DnsServerBootstrapType::Vercel,
+            DnsServerBootstrap::Volcengine(_) => DnsServerBootstrapType::Volcengine,
+            DnsServerBootstrap::Vultr(_) => DnsServerBootstrapType::Vultr,
+            DnsServerBootstrap::WebSupport(_) => DnsServerBootstrapType::WebSupport,
+            DnsServerBootstrap::YandexCloud(_) => DnsServerBootstrapType::YandexCloud,
+        }
+    }
+}
+
+impl DnsServerClouDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        if let Some(value) = &self.auth_id {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::AuthId));
+            }
+        }
+        if let Some(value) = &self.sub_auth_id {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::SubAuthId));
+            }
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerClouDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.auth_id.pickle(out);
+        self.sub_auth_id.pickle(out);
+        self.password.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.auth_id = Pickle::unpickle(stream)?;
+        this.sub_auth_id = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerClouDns {
+    fn default() -> Self {
+        Self {
+            auth_id: Default::default(),
+            sub_auth_id: Default::default(),
+            password: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerClouDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::AuthId, self.auth_id.into_value());
+        map.insert_unchecked(Property::SubAuthId, self.sub_auth_id.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerClouDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AuthId) => self
+                .auth_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SubAuthId) => self
+                .sub_auth_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
         }
     }
 }
@@ -10890,11 +13962,6 @@ impl RegistryJsonPropertyPatch for DnsServerCloud {
 impl DnsServerCloudflare {
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         let neb = errors.len();
-        if let Some(value) = &self.email {
-            if value.is_empty() {
-                errors.push(ValidationError::required(Property::Email));
-            }
-        }
         let value = &self.secret;
         value.validate(errors);
         let value = &self.description;
@@ -10919,7 +13986,6 @@ impl DnsServerCloudflare {
 
 impl Pickle for DnsServerCloudflare {
     fn pickle(&self, out: &mut Vec<u8>) {
-        self.email.pickle(out);
         self.secret.pickle(out);
         self.description.pickle(out);
         self.member_tenant_id.pickle(out);
@@ -10932,7 +13998,9 @@ impl Pickle for DnsServerCloudflare {
 
     fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
         let mut this = Self::default();
-        this.email = Pickle::unpickle(stream)?;
+        if stream.version() < 1 {
+            let _: Option<String> = Pickle::unpickle(stream)?;
+        }
         this.secret = Pickle::unpickle(stream)?;
         this.description = Pickle::unpickle(stream)?;
         this.member_tenant_id = Pickle::unpickle(stream)?;
@@ -10948,7 +14016,6 @@ impl Pickle for DnsServerCloudflare {
 impl Default for DnsServerCloudflare {
     fn default() -> Self {
         Self {
-            email: Default::default(),
             secret: Default::default(),
             description: Default::default(),
             member_tenant_id: Default::default(),
@@ -10963,8 +14030,7 @@ impl Default for DnsServerCloudflare {
 
 impl IntoValue for DnsServerCloudflare {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(11);
-        map.insert_unchecked(Property::Email, self.email.into_value());
+        let mut map = jmap_tools::Map::with_capacity(10);
         map.insert_unchecked(Property::Secret, self.secret.into_value());
         map.insert_unchecked(Property::Description, self.description.into_value());
         map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
@@ -10993,8 +14059,404 @@ impl RegistryJsonPropertyPatch for DnsServerCloudflare {
         value: JmapValue<'x>,
     ) -> PatchResult<'x> {
         match pointer.next_property() {
-            Some(Property::Email) => self
-                .email
+            Some(property @ Property::Email) => Ok(MaybeUnpatched::Unpatched { property, value }),
+            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerConstellix {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerConstellix {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerConstellix {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            secret_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerConstellix {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerConstellix {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self
+                .api_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerCpanel {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.base_url;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::BaseUrl));
+        }
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.token;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerCpanel {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.base_url.pickle(out);
+        self.username.pickle(out);
+        self.token.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.base_url = Pickle::unpickle(stream)?;
+        this.username = Pickle::unpickle(stream)?;
+        this.token = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerCpanel {
+    fn default() -> Self {
+        Self {
+            base_url: Default::default(),
+            username: Default::default(),
+            token: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerCpanel {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::BaseUrl, self.base_url.into_value());
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Token, self.token.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerCpanel {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::BaseUrl) => self
+                .base_url
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Token) => self.token.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerDnsMadeEasy {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerDnsMadeEasy {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.secret.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerDnsMadeEasy {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            secret: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerDnsMadeEasy {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerDnsMadeEasy {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self
+                .api_key
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::Secret) => self.secret.patch(pointer, value),
             Some(Property::Description) => self
@@ -11026,8 +14488,6 @@ impl DnsServerDnsimple {
         if value.is_empty() {
             errors.push(ValidationError::required(Property::AccountIdentifier));
         }
-        let value = &self.secret;
-        value.validate(errors);
         let value = &self.description;
         if value.is_empty() {
             errors.push(ValidationError::required(Property::Description));
@@ -11052,7 +14512,6 @@ impl Pickle for DnsServerDnsimple {
     fn pickle(&self, out: &mut Vec<u8>) {
         self.auth_token.pickle(out);
         self.account_identifier.pickle(out);
-        self.secret.pickle(out);
         self.description.pickle(out);
         self.member_tenant_id.pickle(out);
         self.timeout.pickle(out);
@@ -11066,7 +14525,9 @@ impl Pickle for DnsServerDnsimple {
         let mut this = Self::default();
         this.auth_token = Pickle::unpickle(stream)?;
         this.account_identifier = Pickle::unpickle(stream)?;
-        this.secret = Pickle::unpickle(stream)?;
+        if stream.version() < 1 {
+            let _: SecretKey = Pickle::unpickle(stream)?;
+        }
         this.description = Pickle::unpickle(stream)?;
         this.member_tenant_id = Pickle::unpickle(stream)?;
         this.timeout = Pickle::unpickle(stream)?;
@@ -11083,7 +14544,6 @@ impl Default for DnsServerDnsimple {
         Self {
             auth_token: Default::default(),
             account_identifier: Default::default(),
-            secret: Default::default(),
             description: Default::default(),
             member_tenant_id: Default::default(),
             timeout: Duration::from_millis(30000),
@@ -11097,13 +14557,12 @@ impl Default for DnsServerDnsimple {
 
 impl IntoValue for DnsServerDnsimple {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(12);
+        let mut map = jmap_tools::Map::with_capacity(11);
         map.insert_unchecked(Property::AuthToken, self.auth_token.into_value());
         map.insert_unchecked(
             Property::AccountIdentifier,
             self.account_identifier.into_value(),
         );
-        map.insert_unchecked(Property::Secret, self.secret.into_value());
         map.insert_unchecked(Property::Description, self.description.into_value());
         map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
         map.insert_unchecked(Property::Timeout, self.timeout.into_value());
@@ -11134,6 +14593,813 @@ impl RegistryJsonPropertyPatch for DnsServerDnsimple {
             Some(Property::AuthToken) => self.auth_token.patch(pointer, value),
             Some(Property::AccountIdentifier) => self
                 .account_identifier
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(property @ Property::Secret) => Ok(MaybeUnpatched::Unpatched { property, value }),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerDomeneshop {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.auth_token;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AuthToken));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerDomeneshop {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.auth_token.pickle(out);
+        self.secret.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.auth_token = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerDomeneshop {
+    fn default() -> Self {
+        Self {
+            auth_token: Default::default(),
+            secret: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerDomeneshop {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::AuthToken, self.auth_token.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerDomeneshop {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AuthToken) => self
+                .auth_token
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerEasyDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.token;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Token));
+        }
+        let value = &self.key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerEasyDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.token.pickle(out);
+        self.key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.token = Pickle::unpickle(stream)?;
+        this.key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerEasyDns {
+    fn default() -> Self {
+        Self {
+            token: Default::default(),
+            key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerEasyDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Token, self.token.into_value());
+        map.insert_unchecked(Property::Key, self.key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerEasyDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Token) => self
+                .token
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Key) => self.key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerEdgeDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.host;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Host));
+        }
+        let value = &self.client_token;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ClientToken));
+        }
+        let value = &self.client_secret;
+        value.validate(errors);
+        let value = &self.access_token;
+        value.validate(errors);
+        if let Some(value) = &self.account_switch_key {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::AccountSwitchKey));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerEdgeDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.host.pickle(out);
+        self.client_token.pickle(out);
+        self.client_secret.pickle(out);
+        self.access_token.pickle(out);
+        self.account_switch_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.host = Pickle::unpickle(stream)?;
+        this.client_token = Pickle::unpickle(stream)?;
+        this.client_secret = Pickle::unpickle(stream)?;
+        this.access_token = Pickle::unpickle(stream)?;
+        this.account_switch_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerEdgeDns {
+    fn default() -> Self {
+        Self {
+            host: Default::default(),
+            client_token: Default::default(),
+            client_secret: Default::default(),
+            access_token: Default::default(),
+            account_switch_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerEdgeDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(14);
+        map.insert_unchecked(Property::Host, self.host.into_value());
+        map.insert_unchecked(Property::ClientToken, self.client_token.into_value());
+        map.insert_unchecked(Property::ClientSecret, self.client_secret.into_value());
+        map.insert_unchecked(Property::AccessToken, self.access_token.into_value());
+        map.insert_unchecked(
+            Property::AccountSwitchKey,
+            self.account_switch_key.into_value(),
+        );
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerEdgeDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Host) => self
+                .host
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ClientToken) => self
+                .client_token
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ClientSecret) => self.client_secret.patch(pointer, value),
+            Some(Property::AccessToken) => self.access_token.patch(pointer, value),
+            Some(Property::AccountSwitchKey) => self
+                .account_switch_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerExoscale {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerExoscale {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.secret.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerExoscale {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            secret: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerExoscale {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerExoscale {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self
+                .api_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerGlesys {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_user;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiUser));
+        }
+        let value = &self.api_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerGlesys {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_user.pickle(out);
+        self.api_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_user = Pickle::unpickle(stream)?;
+        this.api_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerGlesys {
+    fn default() -> Self {
+        Self {
+            api_user: Default::default(),
+            api_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerGlesys {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiUser, self.api_user.into_value());
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerGlesys {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiUser) => self
+                .api_user
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerGodaddy {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerGodaddy {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.secret.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerGodaddy {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            secret: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerGodaddy {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerGodaddy {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self
+                .api_key
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::Secret) => self.secret.patch(pointer, value),
             Some(Property::Description) => self
@@ -11322,6 +15588,1990 @@ impl RegistryJsonPropertyPatch for DnsServerGoogleCloudDns {
     }
 }
 
+impl DnsServerHuaweiCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        let value = &self.region;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Region));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerHuaweiCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.region.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerHuaweiCloud {
+    fn default() -> Self {
+        Self {
+            access_key: Default::default(),
+            secret_key: Default::default(),
+            region: "ap-southeast-1".to_string(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerHuaweiCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerHuaweiCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKey) => self
+                .access_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerHurricane {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.credentials;
+        for value in value.values() {
+            value.validate(errors);
+        }
+        if value.len() < 1 {
+            errors.push(ValidationError::min_items(Property::Credentials, 1));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerHurricane {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.credentials.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.credentials = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerHurricane {
+    fn default() -> Self {
+        Self {
+            credentials: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerHurricane {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(10);
+        map.insert_unchecked(Property::Credentials, self.credentials.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerHurricane {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Credentials) => self.credentials.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerIbmCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.api_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerIbmCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.api_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.api_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerIbmCloud {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            api_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerIbmCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerIbmCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerInfoblox {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.host;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Host));
+        }
+        if let Some(value) = &self.port {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Port));
+            }
+        }
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        if let Some(value) = &self.wapi_version {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::WapiVersion));
+            }
+        }
+        if let Some(value) = &self.dns_view {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::DnsView));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerInfoblox {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.host.pickle(out);
+        self.port.pickle(out);
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.wapi_version.pickle(out);
+        self.dns_view.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.host = Pickle::unpickle(stream)?;
+        this.port = Pickle::unpickle(stream)?;
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.wapi_version = Pickle::unpickle(stream)?;
+        this.dns_view = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerInfoblox {
+    fn default() -> Self {
+        Self {
+            host: Default::default(),
+            port: Default::default(),
+            username: Default::default(),
+            password: Default::default(),
+            wapi_version: Default::default(),
+            dns_view: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerInfoblox {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(15);
+        map.insert_unchecked(Property::Host, self.host.into_value());
+        map.insert_unchecked(Property::Port, self.port.into_value());
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::WapiVersion, self.wapi_version.into_value());
+        map.insert_unchecked(Property::DnsView, self.dns_view.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerInfoblox {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Host) => self
+                .host
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Port) => self
+                .port
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::WapiVersion) => self
+                .wapi_version
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::DnsView) => self
+                .dns_view
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerInwx {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.shared_secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerInwx {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.shared_secret.pickle(out);
+        self.sandbox.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.shared_secret = Pickle::unpickle(stream)?;
+        this.sandbox = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerInwx {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            password: Default::default(),
+            shared_secret: Default::default(),
+            sandbox: false,
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerInwx {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(13);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::SharedSecret, self.shared_secret.into_value());
+        map.insert_unchecked(Property::Sandbox, self.sandbox.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerInwx {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::SharedSecret) => self.shared_secret.patch(pointer, value),
+            Some(Property::Sandbox) => self.sandbox.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerJoker {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.auth;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerJoker {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.auth.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.auth = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerJoker {
+    fn default() -> Self {
+        Self {
+            auth: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerJoker {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(10);
+        map.insert_unchecked(Property::Auth, self.auth.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerJoker {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Auth) => self.auth.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerLightsail {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKeyId));
+        }
+        let value = &self.secret_access_key;
+        value.validate(errors);
+        let value = &self.session_token;
+        value.validate(errors);
+        if let Some(value) = &self.region {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Region));
+            }
+        }
+        if let Some(value) = &self.domain {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Domain));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerLightsail {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key_id.pickle(out);
+        self.secret_access_key.pickle(out);
+        self.session_token.pickle(out);
+        self.region.pickle(out);
+        self.domain.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key_id = Pickle::unpickle(stream)?;
+        this.secret_access_key = Pickle::unpickle(stream)?;
+        this.session_token = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.domain = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerLightsail {
+    fn default() -> Self {
+        Self {
+            access_key_id: Default::default(),
+            secret_access_key: Default::default(),
+            session_token: Default::default(),
+            region: Default::default(),
+            domain: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerLightsail {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(14);
+        map.insert_unchecked(Property::AccessKeyId, self.access_key_id.into_value());
+        map.insert_unchecked(
+            Property::SecretAccessKey,
+            self.secret_access_key.into_value(),
+        );
+        map.insert_unchecked(Property::SessionToken, self.session_token.into_value());
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(Property::Domain, self.domain.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerLightsail {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKeyId) => self
+                .access_key_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretAccessKey) => self.secret_access_key.patch(pointer, value),
+            Some(Property::SessionToken) => self.session_token.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Domain) => self
+                .domain
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerLuaDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.auth_token;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerLuaDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.auth_token.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.auth_token = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerLuaDns {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            auth_token: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerLuaDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::AuthToken, self.auth_token.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerLuaDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::AuthToken) => self.auth_token.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerMythicBeasts {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerMythicBeasts {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerMythicBeasts {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            password: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerMythicBeasts {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerMythicBeasts {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerNameDotCom {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.auth_token;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerNameDotCom {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.auth_token.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.auth_token = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerNameDotCom {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            auth_token: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerNameDotCom {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::AuthToken, self.auth_token.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerNameDotCom {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::AuthToken) => self.auth_token.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerNamecheap {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_user;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiUser));
+        }
+        let value = &self.api_key;
+        value.validate(errors);
+        let value = &self.client_ip;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ClientIp));
+        }
+        if let Some(value) = &self.username {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Username));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerNamecheap {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_user.pickle(out);
+        self.api_key.pickle(out);
+        self.client_ip.pickle(out);
+        self.username.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_user = Pickle::unpickle(stream)?;
+        this.api_key = Pickle::unpickle(stream)?;
+        this.client_ip = Pickle::unpickle(stream)?;
+        this.username = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerNamecheap {
+    fn default() -> Self {
+        Self {
+            api_user: Default::default(),
+            api_key: Default::default(),
+            client_ip: Default::default(),
+            username: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerNamecheap {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(13);
+        map.insert_unchecked(Property::ApiUser, self.api_user.into_value());
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::ClientIp, self.client_ip.into_value());
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerNamecheap {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiUser) => self
+                .api_user
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::ClientIp) => self
+                .client_ip
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerNetcup {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.customer_number;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::CustomerNumber));
+        }
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerNetcup {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.customer_number.pickle(out);
+        self.api_key.pickle(out);
+        self.password.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.customer_number = Pickle::unpickle(stream)?;
+        this.api_key = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerNetcup {
+    fn default() -> Self {
+        Self {
+            customer_number: Default::default(),
+            api_key: Default::default(),
+            password: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerNetcup {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::CustomerNumber, self.customer_number.into_value());
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerNetcup {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::CustomerNumber) => self
+                .customer_number
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ApiKey) => self
+                .api_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerNifcloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerNifcloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerNifcloud {
+    fn default() -> Self {
+        Self {
+            access_key: Default::default(),
+            secret_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerNifcloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerNifcloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKey) => self
+                .access_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerOracleCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.tenancy_ocid;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::TenancyOcid));
+        }
+        let value = &self.user_ocid;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::UserOcid));
+        }
+        let value = &self.fingerprint;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Fingerprint));
+        }
+        let value = &self.private_key_pem;
+        value.validate(errors);
+        let value = &self.private_key_password;
+        value.validate(errors);
+        let value = &self.region;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Region));
+        }
+        let value = &self.compartment_ocid;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::CompartmentOcid));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerOracleCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.tenancy_ocid.pickle(out);
+        self.user_ocid.pickle(out);
+        self.fingerprint.pickle(out);
+        self.private_key_pem.pickle(out);
+        self.private_key_password.pickle(out);
+        self.region.pickle(out);
+        self.compartment_ocid.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.tenancy_ocid = Pickle::unpickle(stream)?;
+        this.user_ocid = Pickle::unpickle(stream)?;
+        this.fingerprint = Pickle::unpickle(stream)?;
+        this.private_key_pem = Pickle::unpickle(stream)?;
+        this.private_key_password = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.compartment_ocid = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerOracleCloud {
+    fn default() -> Self {
+        Self {
+            tenancy_ocid: Default::default(),
+            user_ocid: Default::default(),
+            fingerprint: Default::default(),
+            private_key_pem: Default::default(),
+            private_key_password: Default::default(),
+            region: Default::default(),
+            compartment_ocid: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerOracleCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(16);
+        map.insert_unchecked(Property::TenancyOcid, self.tenancy_ocid.into_value());
+        map.insert_unchecked(Property::UserOcid, self.user_ocid.into_value());
+        map.insert_unchecked(Property::Fingerprint, self.fingerprint.into_value());
+        map.insert_unchecked(Property::PrivateKeyPem, self.private_key_pem.into_value());
+        map.insert_unchecked(
+            Property::PrivateKeyPassword,
+            self.private_key_password.into_value(),
+        );
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(
+            Property::CompartmentOcid,
+            self.compartment_ocid.into_value(),
+        );
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerOracleCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::TenancyOcid) => self
+                .tenancy_ocid
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::UserOcid) => self
+                .user_ocid
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Fingerprint) => self
+                .fingerprint
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::PrivateKeyPem) => self.private_key_pem.patch(pointer, value),
+            Some(Property::PrivateKeyPassword) => self.private_key_password.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::CompartmentOcid) => self
+                .compartment_ocid
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
 impl DnsServerOvh {
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         let neb = errors.len();
@@ -11466,6 +17716,135 @@ impl RegistryJsonPropertyPatch for DnsServerOvh {
     }
 }
 
+impl DnsServerPlesk {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.base_url;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::BaseUrl));
+        }
+        let value = &self.api_key;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerPlesk {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.base_url.pickle(out);
+        self.api_key.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.base_url = Pickle::unpickle(stream)?;
+        this.api_key = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerPlesk {
+    fn default() -> Self {
+        Self {
+            base_url: Default::default(),
+            api_key: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerPlesk {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::BaseUrl, self.base_url.into_value());
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerPlesk {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::BaseUrl) => self
+                .base_url
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
 impl DnsServerPorkbun {
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         let neb = errors.len();
@@ -11474,8 +17853,6 @@ impl DnsServerPorkbun {
             errors.push(ValidationError::required(Property::ApiKey));
         }
         let value = &self.secret_api_key;
-        value.validate(errors);
-        let value = &self.secret;
         value.validate(errors);
         let value = &self.description;
         if value.is_empty() {
@@ -11501,7 +17878,6 @@ impl Pickle for DnsServerPorkbun {
     fn pickle(&self, out: &mut Vec<u8>) {
         self.api_key.pickle(out);
         self.secret_api_key.pickle(out);
-        self.secret.pickle(out);
         self.description.pickle(out);
         self.member_tenant_id.pickle(out);
         self.timeout.pickle(out);
@@ -11515,7 +17891,9 @@ impl Pickle for DnsServerPorkbun {
         let mut this = Self::default();
         this.api_key = Pickle::unpickle(stream)?;
         this.secret_api_key = Pickle::unpickle(stream)?;
-        this.secret = Pickle::unpickle(stream)?;
+        if stream.version() < 1 {
+            let _: SecretKey = Pickle::unpickle(stream)?;
+        }
         this.description = Pickle::unpickle(stream)?;
         this.member_tenant_id = Pickle::unpickle(stream)?;
         this.timeout = Pickle::unpickle(stream)?;
@@ -11532,7 +17910,6 @@ impl Default for DnsServerPorkbun {
         Self {
             api_key: Default::default(),
             secret_api_key: Default::default(),
-            secret: Default::default(),
             description: Default::default(),
             member_tenant_id: Default::default(),
             timeout: Duration::from_millis(30000),
@@ -11546,10 +17923,9 @@ impl Default for DnsServerPorkbun {
 
 impl IntoValue for DnsServerPorkbun {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(12);
+        let mut map = jmap_tools::Map::with_capacity(11);
         map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
         map.insert_unchecked(Property::SecretApiKey, self.secret_api_key.into_value());
-        map.insert_unchecked(Property::Secret, self.secret.into_value());
         map.insert_unchecked(Property::Description, self.description.into_value());
         map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
         map.insert_unchecked(Property::Timeout, self.timeout.into_value());
@@ -11581,7 +17957,7 @@ impl RegistryJsonPropertyPatch for DnsServerPorkbun {
                 .api_key
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::SecretApiKey) => self.secret_api_key.patch(pointer, value),
-            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(property @ Property::Secret) => Ok(MaybeUnpatched::Unpatched { property, value }),
             Some(Property::Description) => self
                 .description
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
@@ -11772,179 +18148,6 @@ impl RegistryJsonPropertyPatch for DnsServerRoute53 {
     }
 }
 
-impl DnsServerSig0 {
-    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
-        let neb = errors.len();
-        let value = &self.host;
-        if !value.is_valid() {
-            errors.push(ValidationError::invalid(Property::Host, value));
-        }
-        let value = &self.port;
-        if *value > 65535 {
-            errors.push(ValidationError::max_value(Property::Port, 65535));
-        }
-        if *value < 1 {
-            errors.push(ValidationError::min_value(Property::Port, 1));
-        }
-        let value = &self.public_key;
-        if value.is_empty() {
-            errors.push(ValidationError::required(Property::PublicKey));
-        }
-        let value = &self.key;
-        value.validate(errors);
-        let value = &self.signer_name;
-        if value.is_empty() {
-            errors.push(ValidationError::required(Property::SignerName));
-        }
-        let value = &self.description;
-        if value.is_empty() {
-            errors.push(ValidationError::required(Property::Description));
-        }
-        if let Some(value) = &self.member_tenant_id {
-            if !value.is_valid() {
-                errors.push(ValidationError::required(Property::MemberTenantId));
-            }
-        }
-        errors.len() == neb
-    }
-
-    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
-        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
-        if let Some(value) = &self.member_tenant_id {
-            i.search(Property::MemberTenantId, value);
-        }
-    }
-}
-
-impl Pickle for DnsServerSig0 {
-    fn pickle(&self, out: &mut Vec<u8>) {
-        self.host.pickle(out);
-        self.port.pickle(out);
-        self.public_key.pickle(out);
-        self.key.pickle(out);
-        self.signer_name.pickle(out);
-        self.protocol.pickle(out);
-        self.sig0_algorithm.pickle(out);
-        self.description.pickle(out);
-        self.member_tenant_id.pickle(out);
-        self.timeout.pickle(out);
-        self.ttl.pickle(out);
-        self.polling_interval.pickle(out);
-        self.propagation_timeout.pickle(out);
-        self.propagation_delay.pickle(out);
-    }
-
-    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
-        let mut this = Self::default();
-        this.host = Pickle::unpickle(stream)?;
-        this.port = Pickle::unpickle(stream)?;
-        this.public_key = Pickle::unpickle(stream)?;
-        this.key = Pickle::unpickle(stream)?;
-        this.signer_name = Pickle::unpickle(stream)?;
-        this.protocol = Pickle::unpickle(stream)?;
-        this.sig0_algorithm = Pickle::unpickle(stream)?;
-        this.description = Pickle::unpickle(stream)?;
-        this.member_tenant_id = Pickle::unpickle(stream)?;
-        this.timeout = Pickle::unpickle(stream)?;
-        this.ttl = Pickle::unpickle(stream)?;
-        this.polling_interval = Pickle::unpickle(stream)?;
-        this.propagation_timeout = Pickle::unpickle(stream)?;
-        this.propagation_delay = Pickle::unpickle(stream)?;
-        Some(this)
-    }
-}
-
-impl Default for DnsServerSig0 {
-    fn default() -> Self {
-        Self {
-            host: Default::default(),
-            port: 53u64,
-            public_key: Default::default(),
-            key: Default::default(),
-            signer_name: Default::default(),
-            protocol: IpProtocol::Udp,
-            sig0_algorithm: Sig0Algorithm::Ed25519,
-            description: Default::default(),
-            member_tenant_id: Default::default(),
-            timeout: Duration::from_millis(30000),
-            ttl: Duration::from_millis(300000),
-            polling_interval: Duration::from_millis(15000),
-            propagation_timeout: Duration::from_millis(60000),
-            propagation_delay: Default::default(),
-        }
-    }
-}
-
-impl IntoValue for DnsServerSig0 {
-    fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(16);
-        map.insert_unchecked(Property::Host, self.host.into_value());
-        map.insert_unchecked(Property::Port, self.port.into_value());
-        map.insert_unchecked(Property::PublicKey, self.public_key.into_value());
-        map.insert_unchecked(Property::Key, self.key.into_value());
-        map.insert_unchecked(Property::SignerName, self.signer_name.into_value());
-        map.insert_unchecked(Property::Protocol, self.protocol.into_value());
-        map.insert_unchecked(Property::Sig0Algorithm, self.sig0_algorithm.into_value());
-        map.insert_unchecked(Property::Description, self.description.into_value());
-        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
-        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
-        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
-        map.insert_unchecked(
-            Property::PollingInterval,
-            self.polling_interval.into_value(),
-        );
-        map.insert_unchecked(
-            Property::PropagationTimeout,
-            self.propagation_timeout.into_value(),
-        );
-        map.insert_unchecked(
-            Property::PropagationDelay,
-            self.propagation_delay.into_value(),
-        );
-        JmapValue::Object(map)
-    }
-}
-
-impl RegistryJsonPropertyPatch for DnsServerSig0 {
-    fn patch_property<'x>(
-        &mut self,
-        mut pointer: JsonPointerPatch<'_>,
-        value: JmapValue<'x>,
-    ) -> PatchResult<'x> {
-        match pointer.next_property() {
-            Some(Property::Host) => self
-                .host
-                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
-            Some(Property::Port) => self.port.patch(pointer, value),
-            Some(Property::PublicKey) => self
-                .public_key
-                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
-            Some(Property::Key) => self.key.patch(pointer, value),
-            Some(Property::SignerName) => self
-                .signer_name
-                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
-            Some(Property::Protocol) => self.protocol.patch(pointer, value),
-            Some(Property::Sig0Algorithm) => self.sig0_algorithm.patch(pointer, value),
-            Some(Property::Description) => self
-                .description
-                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
-            Some(Property::MemberTenantId) => self
-                .member_tenant_id
-                .patch(pointer.assert_can_set_tenant()?, value),
-            Some(Property::Timeout) => self.timeout.patch(pointer, value),
-            Some(Property::Ttl) => self.ttl.patch(pointer, value),
-            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
-            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
-            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
-            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
-                property: Property::Type,
-                value,
-            }),
-            _ => Err(PatchError::new(pointer, "Invalid property")),
-        }
-    }
-}
-
 impl DnsServerSpaceship {
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         let neb = errors.len();
@@ -12054,6 +18257,283 @@ impl RegistryJsonPropertyPatch for DnsServerSpaceship {
                 .api_key
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerTencentCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.secret_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::SecretId));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        if let Some(value) = &self.region {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Region));
+            }
+        }
+        let value = &self.session_token;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerTencentCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.secret_id.pickle(out);
+        self.secret_key.pickle(out);
+        self.region.pickle(out);
+        self.session_token.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.secret_id = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.session_token = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerTencentCloud {
+    fn default() -> Self {
+        Self {
+            secret_id: Default::default(),
+            secret_key: Default::default(),
+            region: Default::default(),
+            session_token: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerTencentCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(13);
+        map.insert_unchecked(Property::SecretId, self.secret_id.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(Property::SessionToken, self.session_token.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerTencentCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::SecretId) => self
+                .secret_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SessionToken) => self.session_token.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerTransip {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.private_key_pem;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerTransip {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.private_key_pem.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.private_key_pem = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerTransip {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            private_key_pem: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerTransip {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::PrivateKeyPem, self.private_key_pem.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerTransip {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::PrivateKeyPem) => self.private_key_pem.patch(pointer, value),
             Some(Property::Description) => self
                 .description
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
@@ -12216,6 +18696,700 @@ impl RegistryJsonPropertyPatch for DnsServerTsig {
             Some(Property::Key) => self.key.patch(pointer, value),
             Some(Property::Protocol) => self.protocol.patch(pointer, value),
             Some(Property::TsigAlgorithm) => self.tsig_algorithm.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerUltraDns {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        if let Some(value) = &self.endpoint {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Endpoint));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerUltraDns {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.password.pickle(out);
+        self.endpoint.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        this.endpoint = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerUltraDns {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            password: Default::default(),
+            endpoint: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerUltraDns {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(12);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        map.insert_unchecked(Property::Endpoint, self.endpoint.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerUltraDns {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
+            Some(Property::Endpoint) => self
+                .endpoint
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerVercel {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.auth_token;
+        value.validate(errors);
+        if let Some(value) = &self.team_id {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::TeamId));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerVercel {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.auth_token.pickle(out);
+        self.team_id.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.auth_token = Pickle::unpickle(stream)?;
+        this.team_id = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerVercel {
+    fn default() -> Self {
+        Self {
+            auth_token: Default::default(),
+            team_id: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerVercel {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::AuthToken, self.auth_token.into_value());
+        map.insert_unchecked(Property::TeamId, self.team_id.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerVercel {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AuthToken) => self.auth_token.patch(pointer, value),
+            Some(Property::TeamId) => self
+                .team_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerVolcengine {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.access_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::AccessKey));
+        }
+        let value = &self.secret_key;
+        value.validate(errors);
+        if let Some(value) = &self.region {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Region));
+            }
+        }
+        if let Some(value) = &self.host {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Host));
+            }
+        }
+        if let Some(value) = &self.scheme {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Scheme));
+            }
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerVolcengine {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.access_key.pickle(out);
+        self.secret_key.pickle(out);
+        self.region.pickle(out);
+        self.host.pickle(out);
+        self.scheme.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.access_key = Pickle::unpickle(stream)?;
+        this.secret_key = Pickle::unpickle(stream)?;
+        this.region = Pickle::unpickle(stream)?;
+        this.host = Pickle::unpickle(stream)?;
+        this.scheme = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerVolcengine {
+    fn default() -> Self {
+        Self {
+            access_key: Default::default(),
+            secret_key: Default::default(),
+            region: Default::default(),
+            host: Default::default(),
+            scheme: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerVolcengine {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(14);
+        map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
+        map.insert_unchecked(Property::SecretKey, self.secret_key.into_value());
+        map.insert_unchecked(Property::Region, self.region.into_value());
+        map.insert_unchecked(Property::Host, self.host.into_value());
+        map.insert_unchecked(Property::Scheme, self.scheme.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerVolcengine {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::AccessKey) => self
+                .access_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SecretKey) => self.secret_key.patch(pointer, value),
+            Some(Property::Region) => self
+                .region
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Host) => self
+                .host
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Scheme) => self
+                .scheme
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerWebSupport {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ApiKey));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerWebSupport {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.secret.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerWebSupport {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            secret: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerWebSupport {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerWebSupport {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self
+                .api_key
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Description) => self
+                .description
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::MemberTenantId) => self
+                .member_tenant_id
+                .patch(pointer.assert_can_set_tenant()?, value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::Ttl) => self.ttl.patch(pointer, value),
+            Some(Property::PollingInterval) => self.polling_interval.patch(pointer, value),
+            Some(Property::PropagationTimeout) => self.propagation_timeout.patch(pointer, value),
+            Some(Property::PropagationDelay) => self.propagation_delay.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl DnsServerYandexCloud {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        value.validate(errors);
+        let value = &self.folder_id;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::FolderId));
+        }
+        let value = &self.description;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Description));
+        }
+        if let Some(value) = &self.member_tenant_id {
+            if !value.is_valid() {
+                errors.push(ValidationError::required(Property::MemberTenantId));
+            }
+        }
+        errors.len() == neb
+    }
+
+    fn index<'x>(&'x self, i: &mut IndexBuilder<'x>) {
+        i.foreign_key(ObjectType::Tenant, self.member_tenant_id, None);
+        if let Some(value) = &self.member_tenant_id {
+            i.search(Property::MemberTenantId, value);
+        }
+    }
+}
+
+impl Pickle for DnsServerYandexCloud {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+        self.folder_id.pickle(out);
+        self.description.pickle(out);
+        self.member_tenant_id.pickle(out);
+        self.timeout.pickle(out);
+        self.ttl.pickle(out);
+        self.polling_interval.pickle(out);
+        self.propagation_timeout.pickle(out);
+        self.propagation_delay.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        this.folder_id = Pickle::unpickle(stream)?;
+        this.description = Pickle::unpickle(stream)?;
+        this.member_tenant_id = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.ttl = Pickle::unpickle(stream)?;
+        this.polling_interval = Pickle::unpickle(stream)?;
+        this.propagation_timeout = Pickle::unpickle(stream)?;
+        this.propagation_delay = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for DnsServerYandexCloud {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+            folder_id: Default::default(),
+            description: Default::default(),
+            member_tenant_id: Default::default(),
+            timeout: Duration::from_millis(30000),
+            ttl: Duration::from_millis(300000),
+            polling_interval: Duration::from_millis(15000),
+            propagation_timeout: Duration::from_millis(60000),
+            propagation_delay: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for DnsServerYandexCloud {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(11);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        map.insert_unchecked(Property::FolderId, self.folder_id.into_value());
+        map.insert_unchecked(Property::Description, self.description.into_value());
+        map.insert_unchecked(Property::MemberTenantId, self.member_tenant_id.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::Ttl, self.ttl.into_value());
+        map.insert_unchecked(
+            Property::PollingInterval,
+            self.polling_interval.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationTimeout,
+            self.propagation_timeout.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PropagationDelay,
+            self.propagation_delay.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for DnsServerYandexCloud {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::FolderId) => self
+                .folder_id
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::Description) => self
                 .description
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
@@ -13077,6 +20251,8 @@ impl EncryptionAtRest {
             EncryptionAtRest::Disabled => true,
             EncryptionAtRest::Aes128(inner) => inner.validate(errors),
             EncryptionAtRest::Aes256(inner) => inner.validate(errors),
+            EncryptionAtRest::Aes256Gcm(inner) => inner.validate(errors),
+            EncryptionAtRest::ChaCha20Poly1305(inner) => inner.validate(errors),
         }
     }
 
@@ -13087,6 +20263,12 @@ impl EncryptionAtRest {
                 object.index(i);
             }
             EncryptionAtRest::Aes256(object) => {
+                object.index(i);
+            }
+            EncryptionAtRest::Aes256Gcm(object) => {
+                object.index(i);
+            }
+            EncryptionAtRest::ChaCha20Poly1305(object) => {
                 object.index(i);
             }
         }
@@ -13113,6 +20295,14 @@ impl Pickle for EncryptionAtRest {
                 2u16.pickle(out);
                 inner.pickle(out);
             }
+            EncryptionAtRest::Aes256Gcm(inner) => {
+                3u16.pickle(out);
+                inner.pickle(out);
+            }
+            EncryptionAtRest::ChaCha20Poly1305(inner) => {
+                4u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -13121,6 +20311,8 @@ impl Pickle for EncryptionAtRest {
             0 => Some(EncryptionAtRest::Disabled),
             1 => Pickle::unpickle(stream).map(EncryptionAtRest::Aes128),
             2 => Pickle::unpickle(stream).map(EncryptionAtRest::Aes256),
+            3 => Pickle::unpickle(stream).map(EncryptionAtRest::Aes256Gcm),
+            4 => Pickle::unpickle(stream).map(EncryptionAtRest::ChaCha20Poly1305),
             _ => None,
         }
     }
@@ -13148,6 +20340,20 @@ impl IntoValue for EncryptionAtRest {
                     .insert_unchecked(Property::Type, JmapValue::Str("Aes256".into()));
                 obj
             }
+            EncryptionAtRest::Aes256Gcm(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("Aes256Gcm".into()));
+                obj
+            }
+            EncryptionAtRest::ChaCha20Poly1305(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ChaCha20Poly1305".into()));
+                obj
+            }
         }
     }
 }
@@ -13167,12 +20373,20 @@ impl RegistryJsonPatch for EncryptionAtRest {
                 EncryptionAtRestType::Aes256 => {
                     *self = EncryptionAtRest::Aes256(Default::default())
                 }
+                EncryptionAtRestType::Aes256Gcm => {
+                    *self = EncryptionAtRest::Aes256Gcm(Default::default())
+                }
+                EncryptionAtRestType::ChaCha20Poly1305 => {
+                    *self = EncryptionAtRest::ChaCha20Poly1305(Default::default())
+                }
             }
         }
         match self {
             EncryptionAtRest::Disabled => pointer.assert_eof(),
             EncryptionAtRest::Aes128(inner) => inner.patch(pointer, value),
             EncryptionAtRest::Aes256(inner) => inner.patch(pointer, value),
+            EncryptionAtRest::Aes256Gcm(inner) => inner.patch(pointer, value),
+            EncryptionAtRest::ChaCha20Poly1305(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -13183,6 +20397,8 @@ impl EncryptionAtRest {
             EncryptionAtRest::Disabled => EncryptionAtRestType::Disabled,
             EncryptionAtRest::Aes128(_) => EncryptionAtRestType::Aes128,
             EncryptionAtRest::Aes256(_) => EncryptionAtRestType::Aes256,
+            EncryptionAtRest::Aes256Gcm(_) => EncryptionAtRestType::Aes256Gcm,
+            EncryptionAtRest::ChaCha20Poly1305(_) => EncryptionAtRestType::ChaCha20Poly1305,
         }
     }
 }
@@ -14054,7 +21270,7 @@ impl RegistryJsonPropertyPatch for GroupAccount {
 
 impl ObjectImpl for Http {
     const FLAGS: u64 = OBJ_SINGLETON;
-    const VERSION: u8 = 0;
+    const VERSION: u8 = 1;
     const OBJECT: ObjectType = ObjectType::Http;
 
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
@@ -14071,6 +21287,11 @@ impl ObjectImpl for Http {
         for value in value.values() {
             if value.is_empty() {
                 errors.push(ValidationError::required(Property::ResponseHeaders));
+            }
+        }
+        if let Some(value) = &self.redirect_root {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::RedirectRoot));
             }
         }
         errors.len() == neb
@@ -14107,6 +21328,7 @@ impl Pickle for Http {
         self.use_permissive_cors.pickle(out);
         self.response_headers.pickle(out);
         self.use_x_forwarded.pickle(out);
+        self.redirect_root.pickle(out);
     }
 
     fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
@@ -14118,6 +21340,9 @@ impl Pickle for Http {
         this.use_permissive_cors = Pickle::unpickle(stream)?;
         this.response_headers = Pickle::unpickle(stream)?;
         this.use_x_forwarded = Pickle::unpickle(stream)?;
+        if stream.version() >= 1 {
+            this.redirect_root = Pickle::unpickle(stream)?;
+        }
         Some(this)
     }
 }
@@ -14141,13 +21366,14 @@ impl Default for Http {
             use_permissive_cors: false,
             response_headers: Default::default(),
             use_x_forwarded: false,
+            redirect_root: Some("/account".to_string()),
         }
     }
 }
 
 impl IntoValue for Http {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(9);
+        let mut map = jmap_tools::Map::with_capacity(10);
         map.insert_unchecked(
             Property::RateLimitAuthenticated,
             self.rate_limit_authenticated.into_value(),
@@ -14170,6 +21396,7 @@ impl IntoValue for Http {
             self.response_headers.into_value(),
         );
         map.insert_unchecked(Property::UseXForwarded, self.use_x_forwarded.into_value());
+        map.insert_unchecked(Property::RedirectRoot, self.redirect_root.into_value());
         JmapValue::Object(map)
     }
 }
@@ -14192,6 +21419,9 @@ impl RegistryJsonPropertyPatch for Http {
                 .response_headers
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::UseXForwarded) => self.use_x_forwarded.patch(pointer, value),
+            Some(Property::RedirectRoot) => self
+                .redirect_root
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
                 property: Property::Type,
                 value,
@@ -14901,6 +22131,72 @@ impl HttpLookupFormat {
     }
 }
 
+impl HurricaneCredential {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.zone;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Zone));
+        }
+        let value = &self.secret;
+        value.validate(errors);
+        errors.len() == neb
+    }
+}
+
+impl Pickle for HurricaneCredential {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.zone.pickle(out);
+        self.secret.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.zone = Pickle::unpickle(stream)?;
+        this.secret = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for HurricaneCredential {
+    fn default() -> Self {
+        Self {
+            zone: Default::default(),
+            secret: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for HurricaneCredential {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(4);
+        map.insert_unchecked(Property::Zone, self.zone.into_value());
+        map.insert_unchecked(Property::Secret, self.secret.into_value());
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for HurricaneCredential {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Zone) => self.zone.patch(
+                pointer.with_validators(&[StringValidator::Domain, StringValidator::Trim]),
+                value,
+            ),
+            Some(Property::Secret) => self.secret.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
 impl ObjectImpl for Imap {
     const FLAGS: u64 = OBJ_SINGLETON;
     const VERSION: u8 = 0;
@@ -15034,6 +22330,7 @@ impl ObjectImpl for InMemoryStore {
             InMemoryStore::Sharded(inner) => inner.validate(errors),
             InMemoryStore::Redis(inner) => inner.validate(errors),
             InMemoryStore::RedisCluster(inner) => inner.validate(errors),
+            InMemoryStore::RedisSentinel(inner) => inner.validate(errors),
         }
     }
 
@@ -15064,6 +22361,10 @@ impl Pickle for InMemoryStore {
                 3u16.pickle(out);
                 inner.pickle(out);
             }
+            InMemoryStore::RedisSentinel(inner) => {
+                4u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -15073,6 +22374,7 @@ impl Pickle for InMemoryStore {
             1 => Pickle::unpickle(stream).map(InMemoryStore::Sharded),
             2 => Pickle::unpickle(stream).map(InMemoryStore::Redis),
             3 => Pickle::unpickle(stream).map(InMemoryStore::RedisCluster),
+            4 => Pickle::unpickle(stream).map(InMemoryStore::RedisSentinel),
             _ => None,
         }
     }
@@ -15107,6 +22409,13 @@ impl IntoValue for InMemoryStore {
                     .insert_unchecked(Property::Type, JmapValue::Str("RedisCluster".into()));
                 obj
             }
+            InMemoryStore::RedisSentinel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("RedisSentinel".into()));
+                obj
+            }
         }
     }
 }
@@ -15125,6 +22434,9 @@ impl RegistryJsonPatch for InMemoryStore {
                 InMemoryStoreType::RedisCluster => {
                     *self = InMemoryStore::RedisCluster(Default::default())
                 }
+                InMemoryStoreType::RedisSentinel => {
+                    *self = InMemoryStore::RedisSentinel(Default::default())
+                }
             }
         }
         match self {
@@ -15132,6 +22444,7 @@ impl RegistryJsonPatch for InMemoryStore {
             InMemoryStore::Sharded(inner) => inner.patch(pointer, value),
             InMemoryStore::Redis(inner) => inner.patch(pointer, value),
             InMemoryStore::RedisCluster(inner) => inner.patch(pointer, value),
+            InMemoryStore::RedisSentinel(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -15143,6 +22456,7 @@ impl InMemoryStore {
             InMemoryStore::Sharded(_) => InMemoryStoreType::Sharded,
             InMemoryStore::Redis(_) => InMemoryStoreType::Redis,
             InMemoryStore::RedisCluster(_) => InMemoryStoreType::RedisCluster,
+            InMemoryStore::RedisSentinel(_) => InMemoryStoreType::RedisSentinel,
         }
     }
 }
@@ -15152,6 +22466,7 @@ impl InMemoryStoreBase {
         match self {
             InMemoryStoreBase::Redis(inner) => inner.validate(errors),
             InMemoryStoreBase::RedisCluster(inner) => inner.validate(errors),
+            InMemoryStoreBase::RedisSentinel(inner) => inner.validate(errors),
         }
     }
 }
@@ -15173,6 +22488,10 @@ impl Pickle for InMemoryStoreBase {
                 1u16.pickle(out);
                 inner.pickle(out);
             }
+            InMemoryStoreBase::RedisSentinel(inner) => {
+                2u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -15180,6 +22499,7 @@ impl Pickle for InMemoryStoreBase {
         match u16::unpickle(stream)? {
             0 => Pickle::unpickle(stream).map(InMemoryStoreBase::Redis),
             1 => Pickle::unpickle(stream).map(InMemoryStoreBase::RedisCluster),
+            2 => Pickle::unpickle(stream).map(InMemoryStoreBase::RedisSentinel),
             _ => None,
         }
     }
@@ -15202,6 +22522,13 @@ impl IntoValue for InMemoryStoreBase {
                     .insert_unchecked(Property::Type, JmapValue::Str("RedisCluster".into()));
                 obj
             }
+            InMemoryStoreBase::RedisSentinel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("RedisSentinel".into()));
+                obj
+            }
         }
     }
 }
@@ -15220,11 +22547,15 @@ impl RegistryJsonPatch for InMemoryStoreBase {
                 InMemoryStoreBaseType::RedisCluster => {
                     *self = InMemoryStoreBase::RedisCluster(Default::default())
                 }
+                InMemoryStoreBaseType::RedisSentinel => {
+                    *self = InMemoryStoreBase::RedisSentinel(Default::default())
+                }
             }
         }
         match self {
             InMemoryStoreBase::Redis(inner) => inner.patch(pointer, value),
             InMemoryStoreBase::RedisCluster(inner) => inner.patch(pointer, value),
+            InMemoryStoreBase::RedisSentinel(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -15234,6 +22565,7 @@ impl InMemoryStoreBase {
         match self {
             InMemoryStoreBase::Redis(_) => InMemoryStoreBaseType::Redis,
             InMemoryStoreBase::RedisCluster(_) => InMemoryStoreBaseType::RedisCluster,
+            InMemoryStoreBase::RedisSentinel(_) => InMemoryStoreBaseType::RedisSentinel,
         }
     }
 }
@@ -15561,6 +22893,214 @@ impl RegistryJsonPropertyPatch for Jmap {
             Some(Property::WebsocketThrottle) => self.websocket_throttle.patch(pointer, value),
             Some(Property::WebsocketTimeout) => self.websocket_timeout.patch(pointer, value),
             Some(Property::MaxSubscriptions) => self.max_subscriptions.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl JokerAuth {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        match self {
+            JokerAuth::ApiKey(inner) => inner.validate(errors),
+            JokerAuth::UsernamePassword(inner) => inner.validate(errors),
+        }
+    }
+}
+
+impl Default for JokerAuth {
+    fn default() -> Self {
+        JokerAuth::ApiKey(Default::default())
+    }
+}
+
+impl Pickle for JokerAuth {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        match self {
+            JokerAuth::ApiKey(inner) => {
+                0u16.pickle(out);
+                inner.pickle(out);
+            }
+            JokerAuth::UsernamePassword(inner) => {
+                1u16.pickle(out);
+                inner.pickle(out);
+            }
+        }
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        match u16::unpickle(stream)? {
+            0 => Pickle::unpickle(stream).map(JokerAuth::ApiKey),
+            1 => Pickle::unpickle(stream).map(JokerAuth::UsernamePassword),
+            _ => None,
+        }
+    }
+}
+
+impl IntoValue for JokerAuth {
+    fn into_value(self) -> JmapValue<'static> {
+        match self {
+            JokerAuth::ApiKey(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("ApiKey".into()));
+                obj
+            }
+            JokerAuth::UsernamePassword(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("UsernamePassword".into()));
+                obj
+            }
+        }
+    }
+}
+
+impl RegistryJsonPatch for JokerAuth {
+    fn patch<'x>(
+        &mut self,
+        pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        if !pointer.has_next() {
+            match object_type(&pointer, &value)? {
+                JokerAuthType::ApiKey => *self = JokerAuth::ApiKey(Default::default()),
+                JokerAuthType::UsernamePassword => {
+                    *self = JokerAuth::UsernamePassword(Default::default())
+                }
+            }
+        }
+        match self {
+            JokerAuth::ApiKey(inner) => inner.patch(pointer, value),
+            JokerAuth::UsernamePassword(inner) => inner.patch(pointer, value),
+        }
+    }
+}
+
+impl JokerAuth {
+    pub fn object_type(&self) -> JokerAuthType {
+        match self {
+            JokerAuth::ApiKey(_) => JokerAuthType::ApiKey,
+            JokerAuth::UsernamePassword(_) => JokerAuthType::UsernamePassword,
+        }
+    }
+}
+
+impl JokerAuthApiKey {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.api_key;
+        value.validate(errors);
+        errors.len() == neb
+    }
+}
+
+impl Pickle for JokerAuthApiKey {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.api_key.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.api_key = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for JokerAuthApiKey {
+    fn default() -> Self {
+        Self {
+            api_key: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for JokerAuthApiKey {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(3);
+        map.insert_unchecked(Property::ApiKey, self.api_key.into_value());
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for JokerAuthApiKey {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::ApiKey) => self.api_key.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
+impl JokerAuthUsernamePassword {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.username;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::Username));
+        }
+        let value = &self.password;
+        value.validate(errors);
+        errors.len() == neb
+    }
+}
+
+impl Pickle for JokerAuthUsernamePassword {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.username.pickle(out);
+        self.password.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.username = Pickle::unpickle(stream)?;
+        this.password = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for JokerAuthUsernamePassword {
+    fn default() -> Self {
+        Self {
+            username: Default::default(),
+            password: Default::default(),
+        }
+    }
+}
+
+impl IntoValue for JokerAuthUsernamePassword {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(4);
+        map.insert_unchecked(Property::Username, self.username.into_value());
+        map.insert_unchecked(Property::Password, self.password.into_value());
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for JokerAuthUsernamePassword {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Username) => self
+                .username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Password) => self.password.patch(pointer, value),
             Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
                 property: Property::Type,
                 value,
@@ -16067,6 +23607,7 @@ impl LookupStore {
             LookupStore::Sharded(inner) => inner.validate(errors),
             LookupStore::Redis(inner) => inner.validate(errors),
             LookupStore::RedisCluster(inner) => inner.validate(errors),
+            LookupStore::RedisSentinel(inner) => inner.validate(errors),
         }
     }
 }
@@ -16104,6 +23645,10 @@ impl Pickle for LookupStore {
                 5u16.pickle(out);
                 inner.pickle(out);
             }
+            LookupStore::RedisSentinel(inner) => {
+                6u16.pickle(out);
+                inner.pickle(out);
+            }
         }
     }
 
@@ -16115,6 +23660,7 @@ impl Pickle for LookupStore {
             3 => Pickle::unpickle(stream).map(LookupStore::Sharded),
             4 => Pickle::unpickle(stream).map(LookupStore::Redis),
             5 => Pickle::unpickle(stream).map(LookupStore::RedisCluster),
+            6 => Pickle::unpickle(stream).map(LookupStore::RedisSentinel),
             _ => None,
         }
     }
@@ -16165,6 +23711,13 @@ impl IntoValue for LookupStore {
                     .insert_unchecked(Property::Type, JmapValue::Str("RedisCluster".into()));
                 obj
             }
+            LookupStore::RedisSentinel(obj) => {
+                let mut obj = obj.into_value();
+                obj.as_object_mut()
+                    .unwrap()
+                    .insert_unchecked(Property::Type, JmapValue::Str("RedisSentinel".into()));
+                obj
+            }
         }
     }
 }
@@ -16185,6 +23738,9 @@ impl RegistryJsonPatch for LookupStore {
                 LookupStoreType::RedisCluster => {
                     *self = LookupStore::RedisCluster(Default::default())
                 }
+                LookupStoreType::RedisSentinel => {
+                    *self = LookupStore::RedisSentinel(Default::default())
+                }
             }
         }
         match self {
@@ -16194,6 +23750,7 @@ impl RegistryJsonPatch for LookupStore {
             LookupStore::Sharded(inner) => inner.patch(pointer, value),
             LookupStore::Redis(inner) => inner.patch(pointer, value),
             LookupStore::RedisCluster(inner) => inner.patch(pointer, value),
+            LookupStore::RedisSentinel(inner) => inner.patch(pointer, value),
         }
     }
 }
@@ -16207,6 +23764,7 @@ impl LookupStore {
             LookupStore::Sharded(_) => LookupStoreType::Sharded,
             LookupStore::Redis(_) => LookupStoreType::Redis,
             LookupStore::RedisCluster(_) => LookupStoreType::RedisCluster,
+            LookupStore::RedisSentinel(_) => LookupStoreType::RedisSentinel,
         }
     }
 }
@@ -19629,7 +27187,9 @@ impl ObjectImpl for MtaQueueQuota {
             errors.push(ValidationError::min_items(Property::Key, 1));
         }
         let value = &self.match_;
-        value.validate(errors);
+        if !value.match_.is_empty() || !value.else_.is_empty() {
+            value.validate(errors);
+        }
         if let Some(value) = &self.messages {
             if *value < 1 {
                 errors.push(ValidationError::min_value(Property::Messages, 1));
@@ -22700,7 +30260,7 @@ impl Default for OidcProvider {
     fn default() -> Self {
         Self {
             auth_code_max_attempts: 3u64,
-            anonymous_client_registration: false,
+            anonymous_client_registration: true,
             require_client_registration: false,
             auth_code_expiry: Duration::from_millis(600000),
             refresh_token_expiry: Duration::from_millis(2592000000),
@@ -24536,6 +32096,173 @@ impl RegistryJsonPropertyPatch for RedisClusterStore {
     }
 }
 
+impl RedisSentinelStore {
+    fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
+        let neb = errors.len();
+        let value = &self.urls;
+        for value in value.iter() {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::Urls));
+            }
+        }
+        let value = &self.service_name;
+        if value.is_empty() {
+            errors.push(ValidationError::required(Property::ServiceName));
+        }
+        if let Some(value) = &self.auth_username {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::AuthUsername));
+            }
+        }
+        let value = &self.auth_secret;
+        value.validate(errors);
+        if let Some(value) = &self.sentinel_username {
+            if value.is_empty() {
+                errors.push(ValidationError::required(Property::SentinelUsername));
+            }
+        }
+        let value = &self.sentinel_secret;
+        value.validate(errors);
+        let value = &self.pool_max_connections;
+        if *value > 8192 {
+            errors.push(ValidationError::max_value(
+                Property::PoolMaxConnections,
+                8192,
+            ));
+        }
+        if *value < 1 {
+            errors.push(ValidationError::min_value(Property::PoolMaxConnections, 1));
+        }
+        errors.len() == neb
+    }
+}
+
+impl Pickle for RedisSentinelStore {
+    fn pickle(&self, out: &mut Vec<u8>) {
+        self.urls.pickle(out);
+        self.service_name.pickle(out);
+        self.timeout.pickle(out);
+        self.auth_username.pickle(out);
+        self.auth_secret.pickle(out);
+        self.sentinel_username.pickle(out);
+        self.sentinel_secret.pickle(out);
+        self.protocol_version.pickle(out);
+        self.pool_max_connections.pickle(out);
+        self.pool_timeout_create.pickle(out);
+        self.pool_timeout_wait.pickle(out);
+        self.pool_timeout_recycle.pickle(out);
+    }
+
+    fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
+        let mut this = Self::default();
+        this.urls = Pickle::unpickle(stream)?;
+        this.service_name = Pickle::unpickle(stream)?;
+        this.timeout = Pickle::unpickle(stream)?;
+        this.auth_username = Pickle::unpickle(stream)?;
+        this.auth_secret = Pickle::unpickle(stream)?;
+        this.sentinel_username = Pickle::unpickle(stream)?;
+        this.sentinel_secret = Pickle::unpickle(stream)?;
+        this.protocol_version = Pickle::unpickle(stream)?;
+        this.pool_max_connections = Pickle::unpickle(stream)?;
+        this.pool_timeout_create = Pickle::unpickle(stream)?;
+        this.pool_timeout_wait = Pickle::unpickle(stream)?;
+        this.pool_timeout_recycle = Pickle::unpickle(stream)?;
+        Some(this)
+    }
+}
+
+impl Default for RedisSentinelStore {
+    fn default() -> Self {
+        Self {
+            urls: Map::new(vec!["redis://127.0.0.1:26379".to_string()]),
+            service_name: "mymaster".to_string(),
+            timeout: Duration::from_millis(10000),
+            auth_username: Some("stalwart".to_string()),
+            auth_secret: Default::default(),
+            sentinel_username: Default::default(),
+            sentinel_secret: Default::default(),
+            protocol_version: RedisProtocol::Resp2,
+            pool_max_connections: 10u64,
+            pool_timeout_create: Some(Duration::from_millis(30000)),
+            pool_timeout_wait: Some(Duration::from_millis(30000)),
+            pool_timeout_recycle: Some(Duration::from_millis(30000)),
+        }
+    }
+}
+
+impl IntoValue for RedisSentinelStore {
+    fn into_value(self) -> JmapValue<'static> {
+        let mut map = jmap_tools::Map::with_capacity(14);
+        map.insert_unchecked(Property::Urls, self.urls.into_value());
+        map.insert_unchecked(Property::ServiceName, self.service_name.into_value());
+        map.insert_unchecked(Property::Timeout, self.timeout.into_value());
+        map.insert_unchecked(Property::AuthUsername, self.auth_username.into_value());
+        map.insert_unchecked(Property::AuthSecret, self.auth_secret.into_value());
+        map.insert_unchecked(
+            Property::SentinelUsername,
+            self.sentinel_username.into_value(),
+        );
+        map.insert_unchecked(Property::SentinelSecret, self.sentinel_secret.into_value());
+        map.insert_unchecked(
+            Property::ProtocolVersion,
+            self.protocol_version.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PoolMaxConnections,
+            self.pool_max_connections.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PoolTimeoutCreate,
+            self.pool_timeout_create.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PoolTimeoutWait,
+            self.pool_timeout_wait.into_value(),
+        );
+        map.insert_unchecked(
+            Property::PoolTimeoutRecycle,
+            self.pool_timeout_recycle.into_value(),
+        );
+        JmapValue::Object(map)
+    }
+}
+
+impl RegistryJsonPropertyPatch for RedisSentinelStore {
+    fn patch_property<'x>(
+        &mut self,
+        mut pointer: JsonPointerPatch<'_>,
+        value: JmapValue<'x>,
+    ) -> PatchResult<'x> {
+        match pointer.next_property() {
+            Some(Property::Urls) => self
+                .urls
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::ServiceName) => self
+                .service_name
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::Timeout) => self.timeout.patch(pointer, value),
+            Some(Property::AuthUsername) => self
+                .auth_username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::AuthSecret) => self.auth_secret.patch(pointer, value),
+            Some(Property::SentinelUsername) => self
+                .sentinel_username
+                .patch(pointer.with_validators(&[StringValidator::Trim]), value),
+            Some(Property::SentinelSecret) => self.sentinel_secret.patch(pointer, value),
+            Some(Property::ProtocolVersion) => self.protocol_version.patch(pointer, value),
+            Some(Property::PoolMaxConnections) => self.pool_max_connections.patch(pointer, value),
+            Some(Property::PoolTimeoutCreate) => self.pool_timeout_create.patch(pointer, value),
+            Some(Property::PoolTimeoutWait) => self.pool_timeout_wait.patch(pointer, value),
+            Some(Property::PoolTimeoutRecycle) => self.pool_timeout_recycle.patch(pointer, value),
+            Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
+                property: Property::Type,
+                value,
+            }),
+            _ => Err(PatchError::new(pointer, "Invalid property")),
+        }
+    }
+}
+
 impl RedisStore {
     fn validate(&self, errors: &mut Vec<ValidationError>) -> bool {
         let neb = errors.len();
@@ -25121,6 +32848,7 @@ impl Pickle for S3Store {
         self.max_retries.pickle(out);
         self.key_prefix.pickle(out);
         self.allow_invalid_certs.pickle(out);
+        self.verify_after_write.pickle(out);
     }
 
     fn unpickle(stream: &mut crate::pickle::PickledStream<'_>) -> Option<Self> {
@@ -25136,6 +32864,9 @@ impl Pickle for S3Store {
         this.max_retries = Pickle::unpickle(stream)?;
         this.key_prefix = Pickle::unpickle(stream)?;
         this.allow_invalid_certs = Pickle::unpickle(stream)?;
+        if stream.version() >= 1 {
+            this.verify_after_write = Pickle::unpickle(stream)?;
+        }
         Some(this)
     }
 }
@@ -25154,13 +32885,14 @@ impl Default for S3Store {
             max_retries: 3u64,
             key_prefix: Default::default(),
             allow_invalid_certs: false,
+            verify_after_write: true,
         }
     }
 }
 
 impl IntoValue for S3Store {
     fn into_value(self) -> JmapValue<'static> {
-        let mut map = jmap_tools::Map::with_capacity(13);
+        let mut map = jmap_tools::Map::with_capacity(14);
         map.insert_unchecked(Property::Region, self.region.into_value());
         map.insert_unchecked(Property::Bucket, self.bucket.into_value());
         map.insert_unchecked(Property::AccessKey, self.access_key.into_value());
@@ -25174,6 +32906,10 @@ impl IntoValue for S3Store {
         map.insert_unchecked(
             Property::AllowInvalidCerts,
             self.allow_invalid_certs.into_value(),
+        );
+        map.insert_unchecked(
+            Property::VerifyAfterWrite,
+            self.verify_after_write.into_value(),
         );
         JmapValue::Object(map)
     }
@@ -25205,6 +32941,7 @@ impl RegistryJsonPropertyPatch for S3Store {
                 .key_prefix
                 .patch(pointer.with_validators(&[StringValidator::Trim]), value),
             Some(Property::AllowInvalidCerts) => self.allow_invalid_certs.patch(pointer, value),
+            Some(Property::VerifyAfterWrite) => self.verify_after_write.patch(pointer, value),
             Some(Property::Type) => Ok(MaybeUnpatched::Unpatched {
                 property: Property::Type,
                 value,
@@ -27799,7 +35536,9 @@ impl ObjectImpl for SieveSystemInterpreter {
             }
         }
         let value = &self.default_return_path;
-        value.validate(errors);
+        if !value.match_.is_empty() || !value.else_.is_empty() {
+            value.validate(errors);
+        }
         let value = &self.dkim_sign_domain;
         value.validate(errors);
         let value = &self.max_cpu_cycles;

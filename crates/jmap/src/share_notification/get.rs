@@ -172,9 +172,9 @@ impl ShareNotificationGet for Server {
             response.state = Some(State::Initial);
         }
 
-        response
-            .not_found
-            .extend(ids.into_iter().map(Id::from).collect::<Vec<_>>());
+        for id in ids {
+            response.push_not_found(Id::from(id));
+        }
 
         Ok(response)
     }

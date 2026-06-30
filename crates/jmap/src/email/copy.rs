@@ -89,24 +89,16 @@ impl JmapEmailCopy for Server {
         let mut destroy_ids = Vec::new();
 
         'create: for (id, create) in request.create.into_valid() {
-            let from_message_id = id.document_id();
-            if !from_message_ids.contains(from_message_id) {
-                response.not_created.append(
-                    id,
-                    SetError::not_found().with_description(format!(
-                        "Item {} not found in account {}.",
-                        id, response.from_account_id
-                    )),
-                );
-                continue;
-            }
-
+            let mut from_message_id = None;
             let mut mailboxes = Vec::new();
             let mut keywords = Vec::new();
             let mut received_at = None;
 
             for (property, value) in create.into_expanded_object() {
                 match (property, value) {
+                    (Key::Property(EmailProperty::Id), Value::Element(EmailValue::Id(src))) => {
+                        from_message_id = Some(src.document_id());
+                    }
                     (Key::Property(EmailProperty::MailboxIds), Value::Object(ids)) => {
                         mailboxes = ids
                             .into_expanded_boolean_set()
@@ -161,6 +153,26 @@ impl JmapEmailCopy for Server {
                         continue 'create;
                     }
                 }
+            }
+
+            let Some(from_message_id) = from_message_id else {
+                response.not_created.append(
+                    id,
+                    SetError::invalid_properties()
+                        .with_property(EmailProperty::Id)
+                        .with_description("Missing or invalid \"id\" property."),
+                );
+                continue 'create;
+            };
+            if !from_message_ids.contains(from_message_id) {
+                response.not_created.append(
+                    id,
+                    SetError::not_found().with_description(format!(
+                        "Item {} not found in account {}.",
+                        id, response.from_account_id
+                    )),
+                );
+                continue 'create;
             }
 
             // Make sure message belongs to at least one mailbox

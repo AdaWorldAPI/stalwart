@@ -17,6 +17,19 @@ pub(crate) enum RegistryInit {
 
 impl RegistryStoreInner {
     pub(crate) fn new(local_path: PathBuf) -> Self {
+        let env_hostname = std::env::var("STALWART_HOSTNAME")
+            .ok()
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| {
+                let host = gethostname::gethostname();
+                let host = host.to_string_lossy();
+                if host.parse::<IpAddr>().is_err() {
+                    host.to_lowercase()
+                } else {
+                    "localhost".to_string()
+                }
+            });
+
         Self {
             local_path,
             store: Store::None,
@@ -40,21 +53,18 @@ impl RegistryStoreInner {
                 .ok()
                 .and_then(|id| id.parse::<u32>().ok().and_then(|v| v.checked_sub(1)))
                 .unwrap_or(0),
-            env_hostname: std::env::var("STALWART_HOSTNAME")
+            env_public_url: std::env::var("STALWART_PUBLIC_URL")
                 .ok()
-                .filter(|h| !h.is_empty())
-                .unwrap_or_else(|| {
-                    let host = gethostname::gethostname();
-                    let host = host.to_string_lossy();
-                    if host.parse::<IpAddr>().is_err() {
-                        host.to_lowercase()
-                    } else {
-                        "localhost".to_string()
-                    }
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty())
+                .or_else(|| {
+                    std::env::var("STALWART_HTTPS_PORT").ok().and_then(|p| {
+                        p.parse::<u16>()
+                            .ok()
+                            .map(|port| format!("https://{}:{}", env_hostname, port))
+                    })
                 }),
-            env_https_port: std::env::var("STALWART_HTTPS_PORT")
-                .ok()
-                .and_then(|p| p.parse::<u16>().ok()),
+            env_hostname,
         }
     }
 

@@ -4,11 +4,15 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
+use crate::network::acme::ParsedCert;
 use ahash::{AHashMap, AHashSet};
 use rcgen::generate_simple_self_signed;
-use registry::schema::{
-    prelude::Object,
-    structs::{Certificate, SystemSettings},
+use registry::{
+    schema::{
+        prelude::Object,
+        structs::{Certificate, PublicText, SecretText, SystemSettings},
+    },
+    types::{datetime::UTCDateTime, map::Map},
 };
 use rustls::{
     SupportedProtocolVersion,
@@ -39,20 +43,61 @@ pub(crate) async fn parse_certificates(
     let mut certs_expired = Vec::new();
     let mut certs_expirations = AHashMap::new();
     for cert_obj in bp.list_infallible::<Certificate>().await {
-        let not_valid_after = cert_obj.object.not_valid_after.timestamp();
-        let not_valid_before = cert_obj.object.not_valid_before.timestamp();
+        let obj_id = cert_obj.id;
+        let revision = cert_obj.revision;
+        let mut cert = cert_obj.object;
+
+        let is_file_backed = matches!(cert.certificate, PublicText::File(_))
+            || matches!(cert.private_key, SecretText::File(_));
+        let mut public = None;
+        let mut refreshed_meta = None;
+        if is_file_backed {
+            let pem = match cert.certificate.value().await {
+                Ok(value) => value.into_owned().into_bytes(),
+                Err(err) => {
+                    bp.build_error(obj_id, format!("Failed to obtain certificate value: {err}"));
+                    continue;
+                }
+            };
+            match ParsedCert::parse(&pem) {
+                Ok(parsed) => {
+                    let not_valid_after =
+                        UTCDateTime::from_timestamp(parsed.valid_not_after.timestamp());
+                    let not_valid_before =
+                        UTCDateTime::from_timestamp(parsed.valid_not_before.timestamp());
+                    let sans = Map::new(parsed.sans);
+                    if cert.not_valid_after != not_valid_after
+                        || cert.not_valid_before != not_valid_before
+                        || cert.issuer != parsed.issuer
+                        || cert.subject_alternative_names != sans
+                    {
+                        refreshed_meta =
+                            Some((not_valid_after, not_valid_before, parsed.issuer, sans));
+                    }
+                    public = Some(pem);
+                }
+                Err(err) => {
+                    bp.build_error(obj_id, format!("Invalid certificate: {err}"));
+                    continue;
+                }
+            }
+        }
+
+        let (not_valid_after, not_valid_before) = match refreshed_meta.as_ref() {
+            Some((after, before, _, _)) => (after.timestamp(), before.timestamp()),
+            None => (
+                cert.not_valid_after.timestamp(),
+                cert.not_valid_before.timestamp(),
+            ),
+        };
 
         if not_valid_after <= now {
             certs_expired.push((
-                cert_obj.id,
-                cert_obj
-                    .object
-                    .subject_alternative_names
-                    .clone()
-                    .into_inner(),
+                obj_id,
+                cert.subject_alternative_names.clone().into_inner(),
                 Object {
-                    inner: cert_obj.object.into(),
-                    revision: cert_obj.revision,
+                    inner: cert.into(),
+                    revision,
                 },
             ));
             continue;
@@ -60,33 +105,57 @@ pub(crate) async fn parse_certificates(
             continue; // Skip certificates that are not yet valid
         }
 
-        let mut cert = cert_obj.object;
         let secret = match cert.private_key.secret().await {
             Ok(secret) => secret.into_owned().into_bytes(),
             Err(err) => {
                 bp.build_error(
-                    cert_obj.id,
+                    obj_id,
                     format!("Failed to obtain private key secret: {err}"),
                 );
                 continue;
             }
         };
-        let public = match cert.certificate.value().await {
-            Ok(value) => value.into_owned().into_bytes(),
-            Err(err) => {
-                bp.build_error(
-                    cert_obj.id,
-                    format!("Failed to obtain certificate value: {err}"),
-                );
-                continue;
-            }
+        let public = match public {
+            Some(public) => public,
+            None => match cert.certificate.value().await {
+                Ok(value) => value.into_owned().into_bytes(),
+                Err(err) => {
+                    bp.build_error(obj_id, format!("Failed to obtain certificate value: {err}"));
+                    continue;
+                }
+            },
         };
+
+        if let Some((not_valid_after, not_valid_before, issuer, sans)) = refreshed_meta {
+            let old = Object {
+                inner: cert.clone().into(),
+                revision,
+            };
+            cert.not_valid_after = not_valid_after;
+            cert.not_valid_before = not_valid_before;
+            cert.issuer = issuer;
+            cert.subject_alternative_names = sans;
+            let new = Object {
+                inner: cert.clone().into(),
+                revision,
+            };
+            if let Err(err) = bp
+                .registry
+                .write(RegistryWrite::update(obj_id.id(), &new, &old))
+                .await
+            {
+                trc::error!(
+                    err.details("Failed to refresh TLS certificate metadata in registry.")
+                        .caused_by(trc::location!())
+                );
+            }
+        }
 
         // Add default certificate
         if system
             .default_certificate_id
             .as_ref()
-            .is_some_and(|id| *id == cert_obj.id.id())
+            .is_some_and(|id| *id == obj_id.id())
         {
             cert.subject_alternative_names
                 .push_unchecked("*".to_string());
@@ -120,7 +189,7 @@ pub(crate) async fn parse_certificates(
                 }
             }
             Err(err) => {
-                bp.build_error(cert_obj.id, format!("Invalid certificate: {err}"));
+                bp.build_error(obj_id, format!("Invalid certificate: {err}"));
             }
         }
     }
@@ -189,6 +258,17 @@ pub(crate) fn build_certified_key(
 pub(crate) fn build_self_signed_cert(
     domains: impl Into<Vec<String>>,
 ) -> Result<CertifiedKey, String> {
+    let domains = domains
+        .into()
+        .into_iter()
+        .map(|domain| {
+            if domain.is_ascii() {
+                domain
+            } else {
+                idna::domain_to_ascii(&domain).unwrap_or(domain)
+            }
+        })
+        .collect::<Vec<_>>();
     let rcgen::CertifiedKey { cert, signing_key } = generate_simple_self_signed(domains)
         .map_err(|err| format!("Failed to generate self-signed certificate: {err}",))?;
     build_certified_key(

@@ -6,6 +6,7 @@
 
 use crate::utils::server::TestServer;
 use crate::utils::smtp::SmtpConnection;
+use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use common::{manager::application::Resource, telemetry::tracers::store::TracingStore};
 use http_proto::{ToHttpResponse, request::fetch_body};
@@ -21,7 +22,6 @@ use registry::{
     },
     types::map::Map,
 };
-use aws_lc_rs::hmac;
 use std::{
     sync::{
         Arc,

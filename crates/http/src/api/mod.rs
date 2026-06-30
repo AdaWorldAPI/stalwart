@@ -81,7 +81,7 @@ impl ManagementApi for Server {
                 if let Some(email) = path.get(1).copied() {
                     self.is_http_anonymous_request_allowed(session.remote_ip)
                         .await?;
-                    self.handle_discover_request(decode_path_element(email).as_ref())
+                    self.handle_discover_request(session, decode_path_element(email).as_ref())
                         .await
                 } else {
                     Err(trc::ResourceEvent::NotFound.into_err())
@@ -128,8 +128,10 @@ impl ManagementApi for Server {
                                 self.encode_access_token(
                                     GrantType::LiveTracing,
                                     account_id,
-                                    "web",
+                                    self.account(account_id).await?.name(),
                                     60,
+                                    None,
+                                    None,
                                 )
                                 .await?,
                             ))
@@ -146,8 +148,10 @@ impl ManagementApi for Server {
                                 self.encode_access_token(
                                     GrantType::LiveMetrics,
                                     account_id,
-                                    "web",
+                                    self.account(account_id).await?.name(),
                                     60,
+                                    None,
+                                    None,
                                 )
                                 .await?,
                             ))
@@ -164,8 +168,10 @@ impl ManagementApi for Server {
                                 self.encode_access_token(
                                     GrantType::LiveDelivery,
                                     account_id,
-                                    "web",
+                                    self.account(account_id).await?.name(),
                                     60,
+                                    None,
+                                    None,
                                 )
                                 .await?,
                             ))
@@ -252,34 +258,41 @@ impl ManagementApi for Server {
     ) -> trc::Result<AccessToken> {
         let params = UrlParams::new(req.uri().query());
         if let Some(token) = params.get("token") {
-            // SPDX-SnippetBegin
-            // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
-            // SPDX-License-Identifier: LicenseRef-SEL
-            #[cfg(feature = "enterprise")]
-            if self.core.is_enterprise_edition() {
-                let path = req.uri().path();
-                let (grant_type, permissions) = if path.starts_with("/api/live/tracing") {
-                    (GrantType::LiveTracing, Permission::LiveTracing)
-                } else if path.starts_with("/api/live/metrics") {
-                    (GrantType::LiveMetrics, Permission::LiveMetrics)
-                } else if path.starts_with("/api/live/delivery") {
-                    (GrantType::LiveDelivery, Permission::LiveDeliveryTest)
-                } else {
-                    return Err(trc::ResourceEvent::NotFound.into_err());
-                };
+            let path = req.uri().path();
+            let grant = if path.starts_with("/api/live/delivery") {
+                Some((GrantType::LiveDelivery, Permission::LiveDeliveryTest))
+            } else {
+                // SPDX-SnippetBegin
+                // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+                // SPDX-License-Identifier: LicenseRef-SEL
+                #[cfg(feature = "enterprise")]
+                {
+                    if self.core.is_enterprise_edition() {
+                        if path.starts_with("/api/live/tracing") {
+                            Some((GrantType::LiveTracing, Permission::LiveTracing))
+                        } else if path.starts_with("/api/live/metrics") {
+                            Some((GrantType::LiveMetrics, Permission::LiveMetrics))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                // SPDX-SnippetEnd
+                #[cfg(not(feature = "enterprise"))]
+                {
+                    None
+                }
+            };
+
+            if let Some((grant_type, permission)) = grant {
                 self.validate_access_token(grant_type.into(), token)
                     .await
                     .map(|token_info| {
-                        AccessToken::from_permissions(token_info.account_id, [permissions])
+                        AccessToken::from_permissions(token_info.account_id, [permission])
                     })
             } else {
-                self.authenticate_headers(req, session)
-                    .await
-                    .map(|(_, token)| token)
-            }
-            // SPDX-SnippetEnd
-            #[cfg(not(feature = "enterprise"))]
-            {
                 self.authenticate_headers(req, session)
                     .await
                     .map(|(_, token)| token)
@@ -315,7 +328,10 @@ impl UnauthorizedResponse for HttpResponse {
     fn unauthorized(include_realms: bool) -> Self {
         (if include_realms {
             HttpResponse::new(StatusCode::UNAUTHORIZED)
-                .with_header(header::WWW_AUTHENTICATE, "Bearer realm=\"Stalwart Server\"")
+                .with_header(
+                    header::WWW_AUTHENTICATE,
+                    "Bearer realm=\"Stalwart Server\", resource_metadata=\"/.well-known/oauth-protected-resource\"",
+                )
                 .with_header(header::WWW_AUTHENTICATE, "Basic realm=\"Stalwart Server\"")
         } else {
             HttpResponse::new(StatusCode::UNAUTHORIZED)

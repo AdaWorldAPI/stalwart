@@ -24,8 +24,17 @@ const COUNT_BYTES: u32 = 20;
 const COUNT_SHIFT: u32 = 64 - COUNT_BYTES;
 const SIZE_MASK: u64 = (1u64 << COUNT_SHIFT) - 1;
 
+pub struct BlobQuotaStatus {
+    pub allowed: bool,
+    pub expires_in: u64,
+}
+
 impl Server {
-    pub async fn blob_has_quota(&self, account_id: u32, bytes: usize) -> trc::Result<bool> {
+    pub async fn blob_has_quota(
+        &self,
+        account_id: u32,
+        bytes: usize,
+    ) -> trc::Result<BlobQuotaStatus> {
         if self.core.jmap.upload_tmp_quota_size > 0 || self.core.jmap.upload_tmp_quota_amount > 0 {
             let now = now();
             let range_start = now / self.core.jmap.upload_tmp_ttl;
@@ -50,13 +59,21 @@ impl Server {
                     let count = v >> COUNT_SHIFT;
                     let size = v & SIZE_MASK;
 
-                    (self.core.jmap.upload_tmp_quota_amount == 0
+                    let allowed = (self.core.jmap.upload_tmp_quota_amount == 0
                         || count <= self.core.jmap.upload_tmp_quota_amount as u64)
                         && (self.core.jmap.upload_tmp_quota_size == 0
-                            || size <= self.core.jmap.upload_tmp_quota_size as u64)
+                            || size <= self.core.jmap.upload_tmp_quota_size as u64);
+
+                    BlobQuotaStatus {
+                        allowed,
+                        expires_in,
+                    }
                 })
         } else {
-            Ok(true)
+            Ok(BlobQuotaStatus {
+                allowed: true,
+                expires_in: 0,
+            })
         }
     }
 

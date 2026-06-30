@@ -31,7 +31,7 @@ pub async fn test(test: &TestServer) {
 
     // Let people know that we'll be down in Kokomo
     client
-        .vacation_response_create(
+        .vacation_response_enable(
             "Off the Florida Keys there's a place called Kokomo",
             "That's where you wanna go to get away from it all".into(),
             "That's where <b>you wanna go</b> to get away from it all".into(),
@@ -154,7 +154,13 @@ pub async fn test(test: &TestServer) {
     .await;
 
     // Remove test data
-    client.vacation_response_destroy().await.unwrap();
+    client.vacation_response_disable().await.unwrap();
+    client.sieve_script_deactivate().await.unwrap();
+    let mut request = client.build();
+    request.query_sieve_script();
+    for id in request.send_query_sieve_script().await.unwrap().take_ids() {
+        client.sieve_script_destroy(&id).await.unwrap();
+    }
     test.destroy_all_mailboxes(account).await;
     test.assert_is_empty().await;
 }

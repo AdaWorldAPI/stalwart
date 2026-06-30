@@ -28,7 +28,7 @@ use jmap_proto::{
     method::set::{SetRequest, SetResponse},
     object::email::{Email, EmailProperty, EmailValue},
     references::resolve::ResolveCreatedReference,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::state::State,
 };
 use jmap_tools::{Key, Value};
@@ -117,7 +117,7 @@ impl EmailSet for Server {
         };
 
         let mut last_change_id = None;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
 
         // Process creates
         'create: for (id, object) in request.unwrap_create() {
@@ -792,7 +792,14 @@ impl EmailSet for Server {
         let mut batch = BatchBuilder::new();
         let mut changed_mailboxes: AHashMap<u32, Vec<u32>> = AHashMap::new();
         let mut will_update = Vec::with_capacity(request.update.as_ref().map_or(0, |u| u.len()));
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -868,6 +875,17 @@ impl EmailSet for Server {
                                 response.not_updated.append(id, set_error);
                                 continue 'update;
                             }
+                        }
+                    }
+                    (Key::Property(EmailProperty::Id), value) => {
+                        if !crate::matches_id(&value, id) {
+                            response.not_updated.append(
+                                id,
+                                SetError::invalid_properties()
+                                    .with_property(EmailProperty::Id)
+                                    .with_description("The id property is immutable."),
+                            );
+                            continue 'update;
                         }
                     }
                     (property, _) => {

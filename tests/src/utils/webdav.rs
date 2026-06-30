@@ -13,7 +13,7 @@ use dav_proto::{
 };
 use groupware::DavResourceName;
 use hyper::{HeaderMap, Method, StatusCode, header::AUTHORIZATION};
-use quick_xml::{Reader, events::Event};
+use quick_xml::{Reader, XmlVersion, events::Event};
 use std::{borrow::Cow, time::Duration};
 use store::rand::{Rng, distr::Alphanumeric, rng};
 
@@ -1136,7 +1136,7 @@ fn flatten_xml(xml: &str) -> Vec<(String, String)> {
                 for attr in e.attributes() {
                     let attr = attr.unwrap();
                     let key = str::from_utf8(attr.key.as_ref()).unwrap().to_string();
-                    let value = attr.unescape_value().unwrap();
+                    let value = attr.normalized_value(XmlVersion::Implicit1_0).unwrap();
                     let value_str = value.trim().to_string();
 
                     result.push((format!("{}.[{}]", base_path, key), value_str));
@@ -1151,7 +1151,7 @@ fn flatten_xml(xml: &str) -> Vec<(String, String)> {
                 for attr in e.attributes() {
                     let attr = attr.unwrap();
                     let key = str::from_utf8(attr.key.as_ref()).unwrap().to_string();
-                    let value = attr.unescape_value().unwrap();
+                    let value = attr.normalized_value(XmlVersion::Implicit1_0).unwrap();
                     let value_str = value.trim().to_string();
                     has_attrs = true;
                     result.push((format!("{}.[{}]", base_path, key), value_str));
@@ -1162,7 +1162,7 @@ fn flatten_xml(xml: &str) -> Vec<(String, String)> {
                 }
             }
             Event::Text(e) => {
-                let text = e.xml_content().unwrap();
+                let text = e.xml_content(XmlVersion::Implicit1_0).unwrap();
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
                     if let Some(text_content) = text_content.as_mut() {

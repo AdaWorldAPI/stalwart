@@ -124,6 +124,130 @@ pub async fn test(test: &TestServer) {
         .await
         .unwrap();
 
+        // Read-your-writes through the cached read version: overwrite a key in a tight loop
+        println!("Running FoundationDB read-your-writes test...");
+        for n in 0u64..200 {
+            db.write(
+                BatchBuilder::new()
+                    .with_account_id(0)
+                    .with_collection(Collection::Email)
+                    .with_document(0)
+                    .set(
+                        ValueClass::Registry(RegistryClass::Item {
+                            object_id: 100,
+                            item_id: 0,
+                        }),
+                        n.to_be_bytes().to_vec(),
+                    )
+                    .build_all(),
+            )
+            .await
+            .unwrap();
+
+            let got = db
+                .get_value::<u64>(ValueKey {
+                    account_id: 0,
+                    collection: 0,
+                    document_id: 0,
+                    class: ValueClass::Registry(RegistryClass::Item {
+                        object_id: 100,
+                        item_id: 0,
+                    }),
+                })
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(got, n, "stale read: wrote {n} but read back {got}");
+        }
+        db.write(
+            BatchBuilder::new()
+                .with_account_id(0)
+                .with_collection(Collection::Email)
+                .with_document(0)
+                .clear(ValueClass::Registry(RegistryClass::Item {
+                    object_id: 100,
+                    item_id: 0,
+                }))
+                .build_all(),
+        )
+        .await
+        .unwrap();
+
+        // Read-version cache monotonicity under concurrency: while a writer increments a counter
+        println!("Running FoundationDB read-version monotonicity test...");
+        let n_increments = 500u64;
+
+        let writer = {
+            let db = db.clone();
+            tokio::spawn(async move {
+                for _ in 0..n_increments {
+                    db.write(
+                        BatchBuilder::new()
+                            .with_account_id(0)
+                            .with_collection(Collection::Email)
+                            .with_document(5000)
+                            .add_and_get(ValueClass::Quota, 1)
+                            .build_all(),
+                    )
+                    .await
+                    .unwrap();
+                }
+            })
+        };
+
+        let mut readers = Vec::new();
+        for _ in 0..16 {
+            let db = db.clone();
+            readers.push(tokio::spawn(async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+                let mut last = 0i64;
+                while std::time::Instant::now() < deadline {
+                    let current = db
+                        .get_counter(ValueKey {
+                            account_id: 0,
+                            collection: 0,
+                            document_id: 5000,
+                            class: ValueClass::Quota,
+                        })
+                        .await
+                        .unwrap();
+                    assert!(
+                        current >= last,
+                        "read version regressed: counter went from {last} to {current}"
+                    );
+                    last = current;
+                }
+            }));
+        }
+
+        writer.await.unwrap();
+        for reader in readers {
+            reader.await.unwrap();
+        }
+
+        assert_eq!(
+            db.get_counter(ValueKey {
+                account_id: 0,
+                collection: 0,
+                document_id: 5000,
+                class: ValueClass::Quota,
+            })
+            .await
+            .unwrap(),
+            n_increments as i64,
+            "counter did not reach the expected total"
+        );
+        db.write(
+            BatchBuilder::new()
+                .with_account_id(0)
+                .with_collection(Collection::Email)
+                .with_document(5000)
+                .clear(ValueClass::Quota)
+                .build_all(),
+        )
+        .await
+        .unwrap();
+
         if std::env::var("SLOW_FDB_TRX").is_ok() {
             println!("Running FoundationDB slow transaction tests...");
             // Create 900000 keys

@@ -140,19 +140,31 @@ impl<T: MapItem + Default> RegistryJsonPatch for Map<T> {
     ) -> PatchResult<'x> {
         match (pointer.next(), value) {
             (Some(JsonPointerItem::Number(idx)), Value::Null | Value::Bool(false)) => {
-                if let Some(key) = T::try_from_integer(*idx) {
+                let key = T::try_from_integer(*idx);
+
+                if !pointer.has_next()
+                    && let Some(key) = key
+                {
                     self.0.retain(|item| item != &key);
                     return Ok(MaybeUnpatched::Patched);
                 }
             }
             (Some(JsonPointerItem::Key(key)), Value::Null | Value::Bool(false)) => {
-                if let Some(key) = T::try_from_string(key.to_string().as_ref()) {
+                let key = T::try_from_string(key.to_string().as_ref());
+
+                if !pointer.has_next()
+                    && let Some(key) = key
+                {
                     self.0.retain(|item| item != &key);
                     return Ok(MaybeUnpatched::Patched);
                 }
             }
             (Some(JsonPointerItem::Key(key)), Value::Bool(true)) => {
-                if let Some(key) = T::try_from_string(key.to_string().as_ref()) {
+                let key = T::try_from_string(key.to_string().as_ref());
+
+                if !pointer.has_next()
+                    && let Some(key) = key
+                {
                     if !self.0.contains(&key) {
                         self.0.push(key);
                     }
@@ -161,7 +173,10 @@ impl<T: MapItem + Default> RegistryJsonPatch for Map<T> {
                 }
             }
             (Some(JsonPointerItem::Number(idx)), Value::Bool(true)) => {
-                if let Some(key) = T::try_from_integer(*idx) {
+                let key = T::try_from_integer(*idx);
+                if !pointer.has_next()
+                    && let Some(key) = key
+                {
                     if !self.0.contains(&key) {
                         self.0.push(key);
                     }
@@ -285,8 +300,8 @@ impl MapItem for Id {
         Id::from_str(value).ok()
     }
 
-    fn try_from_integer(_: u64) -> Option<Self> {
-        None
+    fn try_from_integer(value: u64) -> Option<Self> {
+        Id::from_str(&value.to_string()).ok()
     }
 
     fn into_string(self) -> Cow<'static, str> {
@@ -400,5 +415,30 @@ impl<T: MapItem> IntoIterator for Map<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{jmap::JsonPointerPatch, schema::prelude::Property};
+    use jmap_tools::JsonPointer;
+
+    fn patch_member(ptr_str: &str) -> Map<Id> {
+        let mut map = Map::<Id>::default();
+        let ptr = JsonPointer::<Property>::parse(ptr_str);
+        let pointer = JsonPointerPatch::new(&ptr);
+        map.patch(pointer, Value::Bool(true)).expect("patch failed");
+        map
+    }
+
+    #[test]
+    fn patch_map_id_digit_keys() {
+        for id in [0u64, 28, 29, 70, 861, 954, 957, 30554] {
+            let id = Id::new(id);
+            let key = id.as_string();
+            let map = patch_member(&key);
+            assert_eq!(map.0, vec![id], "id {} via key '{key}'", id.id());
+        }
     }
 }

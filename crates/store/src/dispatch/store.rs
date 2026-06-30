@@ -357,27 +357,39 @@ impl Store {
             .caused_by(trc::location!())?;
         }
 
-        for (from_class, to_class) in [
-            (ValueClass::Acl(account_id), ValueClass::Acl(account_id + 1)),
-            (ValueClass::Property(0), ValueClass::Property(0)),
-        ] {
-            self.delete_range(
-                ValueKey {
-                    account_id,
-                    collection: 0,
-                    document_id: 0,
-                    class: from_class,
-                },
-                ValueKey {
-                    account_id: account_id + 1,
-                    collection: 0,
-                    document_id: 0,
-                    class: to_class,
-                },
-            )
-            .await
-            .caused_by(trc::location!())?;
-        }
+        self.delete_range(
+            ValueKey {
+                account_id: 0,
+                collection: 0,
+                document_id: 0,
+                class: ValueClass::Acl(account_id),
+            },
+            ValueKey {
+                account_id: 0,
+                collection: 0,
+                document_id: 0,
+                class: ValueClass::Acl(account_id + 1),
+            },
+        )
+        .await
+        .caused_by(trc::location!())?;
+
+        self.delete_range(
+            ValueKey {
+                account_id,
+                collection: 0,
+                document_id: 0,
+                class: ValueClass::Property(0),
+            },
+            ValueKey {
+                account_id: account_id + 1,
+                collection: 0,
+                document_id: 0,
+                class: ValueClass::Property(0),
+            },
+        )
+        .await
+        .caused_by(trc::location!())?;
 
         Ok(())
     }

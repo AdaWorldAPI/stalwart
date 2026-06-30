@@ -34,7 +34,7 @@ use jmap_proto::{
     error::set::SetError,
     method::set::{SetRequest, SetResponse},
     object::calendar_event,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::state::State,
 };
 use jmap_tools::{JsonPointerHandler, JsonPointerItem, Key, Map, Value};
@@ -50,7 +50,7 @@ use trc::AddContext;
 use types::{
     acl::Acl,
     blob::BlobId,
-    collection::{Collection, SyncCollection},
+    collection::{Collection, SyncCollection, VanishedCollection},
     id::Id,
 };
 
@@ -97,7 +97,7 @@ impl CalendarEventSet for Server {
             .await
             .caused_by(trc::location!())?;
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
 
         // Obtain calendarIds
         let (can_add_calendars, can_delete_calendars, can_modify_calendars) =
@@ -146,7 +146,14 @@ impl CalendarEventSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -189,6 +196,7 @@ impl CalendarEventSet for Server {
             // Process changes
             if let Err(err) = update_calendar_event(
                 access_token,
+                Some(id),
                 object,
                 &mut new_calendar_event,
                 &mut js_calendar_group,
@@ -494,6 +502,10 @@ impl CalendarEventSet for Server {
                 )
                 .caused_by(trc::location!())?;
 
+            for path in cache.format_resource_paths_by_id(document_id) {
+                batch.log_vanished_item(VanishedCollection::Calendar, path);
+            }
+
             response.destroyed.push(id);
         }
 
@@ -528,6 +540,7 @@ impl CalendarEventSet for Server {
         let mut event = CalendarEvent::default();
         let use_default_alerts = match update_calendar_event(
             access_token,
+            None,
             updates,
             &mut event,
             &mut js_calendar_group,
@@ -693,6 +706,7 @@ impl CalendarEventSet for Server {
 
 fn update_calendar_event<'x>(
     _access_token: &AccessToken,
+    expected_id: Option<Id>,
     updates: Value<'x, JSCalendarProperty<Id>, JSCalendarValue<Id, BlobId>>,
     event: &mut CalendarEvent,
     js_calendar_group: &mut JSCalendar<'x, Id, BlobId>,
@@ -785,16 +799,24 @@ fn update_calendar_event<'x>(
                 }
                 entries = js_calendar_event.as_object_mut().unwrap();
             }
+            (JSCalendarProperty::Id, value) => {
+                if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                    return Err(SetError::invalid_properties()
+                        .with_property(JSCalendarProperty::Id)
+                        .with_description("This property is immutable."));
+                }
+            }
             (
-                property @ (JSCalendarProperty::Id
-                | JSCalendarProperty::BaseEventId
+                property @ (JSCalendarProperty::BaseEventId
                 | JSCalendarProperty::IsOrigin
                 | JSCalendarProperty::Method),
-                _,
+                value,
             ) => {
-                return Err(SetError::invalid_properties()
-                    .with_property(property)
-                    .with_description("This property is immutable."));
+                if entries.get(&Key::Property(property.clone())) != Some(&value) {
+                    return Err(SetError::invalid_properties()
+                        .with_property(property)
+                        .with_description("This property is immutable."));
+                }
             }
             (
                 property @ (JSCalendarProperty::IsDraft

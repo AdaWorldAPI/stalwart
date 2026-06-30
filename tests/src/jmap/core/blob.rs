@@ -16,6 +16,7 @@ pub async fn test(test: &TestServer) {
 
     // Blob/set simple test
     let response = account.jmap_method_call("Blob/upload", json!({
+             "accountId": account.id_string(),
              "create": {
               "abc": {
                "data" : [
@@ -52,6 +53,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_call(
             "Blob/upload",
             json!({
+             "accountId": account.id_string(),
              "create": {
               "abc": {
                "data" : [
@@ -73,6 +75,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_calls(json!([[
             "Blob/get",
             {
+              "accountId": account.id_string(),
               "ids" : [
                 blob_id
               ],
@@ -87,6 +90,7 @@ pub async fn test(test: &TestServer) {
           [
             "Blob/get",
             {
+              "accountId": account.id_string(),
               "ids" : [
                 blob_id
               ],
@@ -146,6 +150,7 @@ pub async fn test(test: &TestServer) {
          [
           "Blob/upload",
           {
+           "accountId": account.id_string(),
            "create": {
             "b4": {
              "data": [
@@ -161,6 +166,7 @@ pub async fn test(test: &TestServer) {
         [
           "Blob/upload",
           {
+           "accountId": account.id_string(),
            "create": {
              "cat": {
                "data": [
@@ -192,6 +198,7 @@ pub async fn test(test: &TestServer) {
         [
           "Blob/get",
           {
+           "accountId": account.id_string(),
            "properties": [
              "data:asText",
              "size"
@@ -232,6 +239,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/upload",
               {
+                "accountId": account.id_string(),
                 "create": {
                   "b1": {
                     "data": [
@@ -255,6 +263,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/get",
               {
+                "accountId": account.id_string(),
                 "ids": [
                   "#b1",
                   "#b2"
@@ -265,6 +274,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/get",
               {
+                "accountId": account.id_string(),
                 "ids": [
                   "#b1",
                   "#b2"
@@ -279,6 +289,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/get",
               {
+                "accountId": account.id_string(),
                 "ids": [
                   "#b1",
                   "#b2"
@@ -293,6 +304,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/get",
               {
+                "accountId": account.id_string(),
                 "offset": 0,
                 "length": 5,
                 "ids": [
@@ -305,6 +317,7 @@ pub async fn test(test: &TestServer) {
             [
               "Blob/get",
               {
+                "accountId": account.id_string(),
                 "offset": 20,
                 "length": 100,
                 "ids": [
@@ -380,6 +393,7 @@ pub async fn test(test: &TestServer) {
         .jmap_method_call(
             "Blob/lookup",
             json!({
+              "accountId": account.id_string(),
               "typeNames": [
                 "Mailbox",
                 "Thread",

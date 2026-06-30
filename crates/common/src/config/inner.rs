@@ -22,7 +22,7 @@ use crate::{
 };
 use ahash::{AHashMap, AHashSet};
 use arc_swap::ArcSwap;
-use mail_auth::{MX, Parameters, Txt};
+use mail_auth::{MX, Parameters, RecordSet, Txt};
 use parking_lot::RwLock;
 use registry::schema::{prelude::ObjectType, structs};
 use std::{
@@ -199,10 +199,10 @@ impl Caches {
         '_,
         T,
         CacheWithTtl<Box<str>, Txt>,
-        CacheWithTtl<Box<str>, Arc<[MX]>>,
-        CacheWithTtl<Box<str>, Arc<[Ipv4Addr]>>,
-        CacheWithTtl<Box<str>, Arc<[Ipv6Addr]>>,
-        CacheWithTtl<IpAddr, Arc<[Box<str>]>>,
+        CacheWithTtl<Box<str>, RecordSet<MX>>,
+        CacheWithTtl<Box<str>, RecordSet<Ipv4Addr>>,
+        CacheWithTtl<Box<str>, RecordSet<Ipv6Addr>>,
+        CacheWithTtl<IpAddr, RecordSet<Box<str>>>,
     > {
         Parameters {
             params,

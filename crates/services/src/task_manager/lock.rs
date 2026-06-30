@@ -24,7 +24,6 @@ impl TaskLockManager for Server {
                         TaskManager(TaskManagerEvent::TaskLocked),
                         Id = id,
                         Details = "Task details not available",
-                        Expires = trc::Value::Timestamp(now() + DEFAULT_LOCK_EXPIRY),
                     );
                 }
                 result

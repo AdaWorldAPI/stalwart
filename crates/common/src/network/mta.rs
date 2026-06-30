@@ -108,19 +108,28 @@ impl Server {
             .get_directory_for_cached_domain(&domain)
             .filter(|directory| directory.can_lookup_recipients());
         if let Some(directory) = directory {
-            let address = if local_part.as_ref() == local_part_orig {
-                Cow::Borrowed(rcpt)
-            } else {
+            let is_subaddressed = local_part.as_ref() != local_part_orig;
+            let address = if is_subaddressed {
                 Cow::Owned(format!("{local_part}@{domain_part}"))
+            } else {
+                Cow::Borrowed(rcpt)
             };
             match directory.recipient(address.as_ref()).await? {
                 Recipient::Account(account) => {
-                    self.synchronize_account(account).await?;
-                    return Ok(RcptResolution::Accept);
+                    Box::pin(self.synchronize_account(account)).await?;
+                    return Ok(if is_subaddressed {
+                        RcptResolution::Rewrite(address.into_owned())
+                    } else {
+                        RcptResolution::Accept
+                    });
                 }
                 Recipient::Group(group) => {
-                    self.synchronize_group(group).await?;
-                    return Ok(RcptResolution::Accept);
+                    Box::pin(self.synchronize_group(group)).await?;
+                    return Ok(if is_subaddressed {
+                        RcptResolution::Rewrite(address.into_owned())
+                    } else {
+                        RcptResolution::Accept
+                    });
                 }
                 Recipient::Invalid => {}
             }

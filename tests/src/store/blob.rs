@@ -41,10 +41,10 @@ pub async fn blob_tests() {
     );
 
     // Test blob quota
-    assert!(test.server.blob_has_quota(0, 1024).await.unwrap());
-    assert!(!test.server.blob_has_quota(0, 1024).await.unwrap());
+    assert!(test.server.blob_has_quota(0, 1024).await.unwrap().allowed);
+    assert!(!test.server.blob_has_quota(0, 1024).await.unwrap().allowed);
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    assert!(test.server.blob_has_quota(0, 1024).await.unwrap());
+    assert!(test.server.blob_has_quota(0, 1024).await.unwrap().allowed);
 
     // Test and reset store
     test_store(blob_store.clone()).await;

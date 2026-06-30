@@ -4,10 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
+use crate::{Server, auth::AccessToken};
 use serde::{Deserialize, Serialize};
 use trc::{AddContext, AuthEvent, EventType};
-
-use crate::{Server, auth::AccessToken};
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct OAuthIntrospect {
@@ -56,7 +55,6 @@ impl Server {
         match self.validate_access_token(None, token).await {
             Ok(token_info) => Ok(OAuthIntrospect {
                 active: true,
-                client_id: Some(token_info.client_id),
                 username: self
                     .account(access_token.account_id())
                     .await

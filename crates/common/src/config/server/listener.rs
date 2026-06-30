@@ -24,7 +24,11 @@ use rustls::{
     ALL_VERSIONS, ServerConfig, SupportedCipherSuite,
     crypto::aws_lc_rs::{ALL_CIPHER_SUITES, cipher_suite::*, default_provider},
 };
-use std::{str::FromStr, sync::Arc};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr as StdSocketAddr},
+    str::FromStr,
+    sync::Arc,
+};
 use store::registry::{RegistryObject, bootstrap::Bootstrap};
 use tokio::net::TcpSocket;
 use tokio_rustls::TlsAcceptor;
@@ -109,13 +113,37 @@ impl Listeners {
         let mut listeners = Vec::new();
         for addr in listener.bind.iter() {
             // Parse bind address and build socket
-            let addr = addr.0;
+            let mut addr = addr.0;
             let socket = match if addr.is_ipv4() {
                 TcpSocket::new_v4()
             } else {
                 TcpSocket::new_v6()
             } {
                 Ok(socket) => socket,
+                Err(err)
+                    if is_eafnosupport(&err) && addr.is_ipv6() && addr.ip().is_unspecified() =>
+                {
+                    let v4_addr =
+                        StdSocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), addr.port());
+                    bp.build_warning(
+                        id,
+                        format!(
+                            "IPv6 unavailable on this host ({err}); \
+                             falling back from {addr} to {v4_addr}"
+                        ),
+                    );
+                    addr = v4_addr;
+                    match TcpSocket::new_v4() {
+                        Ok(socket) => socket,
+                        Err(err) => {
+                            bp.build_error(
+                                id,
+                                format!("Failed to create IPv4 fallback socket: {err}"),
+                            );
+                            return;
+                        }
+                    }
+                }
                 Err(err) => {
                     bp.build_error(id, format!("Failed to create socket: {err}"));
                     return;
@@ -213,14 +241,10 @@ impl Listeners {
                 let mut disabled_ciphers: Vec<SupportedCipherSuite> = Vec::new();
                 for disabled in listener.tls_disable_cipher_suites {
                     disabled_ciphers.push(match disabled {
-                        TlsCipherSuite::Tls13Aes256GcmSha384 => {
-                            TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
-                        }
-                        TlsCipherSuite::Tls13Aes128GcmSha256 => {
-                            TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
-                        }
+                        TlsCipherSuite::Tls13Aes256GcmSha384 => TLS13_AES_256_GCM_SHA384,
+                        TlsCipherSuite::Tls13Aes128GcmSha256 => TLS13_AES_128_GCM_SHA256,
                         TlsCipherSuite::Tls13Chacha20Poly1305Sha256 => {
-                            TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+                            TLS13_CHACHA20_POLY1305_SHA256
                         }
                         TlsCipherSuite::TlsEcdheEcdsaWithAes256GcmSha384 => {
                             TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
@@ -286,5 +310,21 @@ impl Listeners {
 
             self.tcp_acceptors.insert(listener.name, acceptor);
         }
+    }
+}
+
+fn is_eafnosupport(err: &std::io::Error) -> bool {
+    let code = err.raw_os_error();
+    #[cfg(unix)]
+    {
+        code == Some(libc::EAFNOSUPPORT)
+    }
+    #[cfg(windows)]
+    {
+        code == Some(10047)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
     }
 }

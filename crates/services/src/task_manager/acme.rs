@@ -43,11 +43,12 @@ const MAX_RETRIES: u32 = 5;
 async fn acme_management(server: &Server, task: &TaskDomainManagement) -> trc::Result<TaskResult> {
     let mut last_temporary_error = Ok(TaskResult::temporary(""));
     for retry in 0..MAX_RETRIES {
-        last_temporary_error = match server.acme_renew(task.domain_id).await {
+        last_temporary_error = match Box::pin(server.acme_renew(task.domain_id)).await {
             Ok(tasks) => return Ok(TaskResult::Success(tasks)),
             Err(err) => match err {
                 AcmeError::Crypto(_)
                 | AcmeError::Invalid(_)
+                | AcmeError::NotDue(_)
                 | AcmeError::ChallengeNotSupported { .. }
                 | AcmeError::OrderInvalid(_)
                 | AcmeError::Json(_)

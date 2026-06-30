@@ -57,6 +57,10 @@ pub struct AcmeProvider {
     pub max_retries: i64,
     #[serde(rename = "memberTenantId")]
     pub member_tenant_id: Option<Id>,
+    #[serde(rename = "preferredChain")]
+    pub preferred_chain: Option<String>,
+    #[serde(rename = "reuseKey")]
+    pub reuse_key: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -784,6 +788,7 @@ pub enum Coordinator {
     Zenoh(ZenohCoordinator),
     Redis(RedisStore),
     RedisCluster(RedisClusterStore),
+    RedisSentinel(RedisSentinelStore),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1344,7 +1349,7 @@ pub struct DnsResolverTls {
 #[serde(tag = "@type")]
 pub enum DnsServer {
     Tsig(DnsServerTsig),
-    Sig0(DnsServerSig0),
+    Deprecated1,
     Cloudflare(DnsServerCloudflare),
     DigitalOcean(DnsServerCloud),
     DeSEC(DnsServerCloud),
@@ -1355,6 +1360,203 @@ pub enum DnsServer {
     Spaceship(DnsServerSpaceship),
     Route53(DnsServerRoute53),
     GoogleCloudDns(DnsServerGoogleCloudDns),
+    Alidns(DnsServerAlidns),
+    ArvanCloud(DnsServerCloud),
+    Autodns(DnsServerAutodns),
+    AzureDns(DnsServerAzureDns),
+    BaiduCloud(DnsServerBaiduCloud),
+    BluecatV2(DnsServerBluecatV2),
+    ClouDns(DnsServerClouDns),
+    Constellix(DnsServerConstellix),
+    Cpanel(DnsServerCpanel),
+    Ddnss(DnsServerCloud),
+    DnsMadeEasy(DnsServerDnsMadeEasy),
+    Domeneshop(DnsServerDomeneshop),
+    Dreamhost(DnsServerCloud),
+    DuckDns(DnsServerCloud),
+    Dynu(DnsServerCloud),
+    EasyDns(DnsServerEasyDns),
+    EdgeDns(DnsServerEdgeDns),
+    Exoscale(DnsServerExoscale),
+    FreeMyIp(DnsServerCloud),
+    GandiV5(DnsServerCloud),
+    Gcore(DnsServerCloud),
+    Glesys(DnsServerGlesys),
+    Godaddy(DnsServerGodaddy),
+    Hetzner(DnsServerCloud),
+    HostingDe(DnsServerCloud),
+    Hostinger(DnsServerCloud),
+    HuaweiCloud(DnsServerHuaweiCloud),
+    Hurricane(DnsServerHurricane),
+    IbmCloud(DnsServerIbmCloud),
+    Infoblox(DnsServerInfoblox),
+    Infomaniak(DnsServerCloud),
+    Inwx(DnsServerInwx),
+    Ionos(DnsServerCloud),
+    Ipv64(DnsServerCloud),
+    Joker(DnsServerJoker),
+    Lightsail(DnsServerLightsail),
+    Linode(DnsServerCloud),
+    LuaDns(DnsServerLuaDns),
+    MythicBeasts(DnsServerMythicBeasts),
+    Namecheap(DnsServerNamecheap),
+    NameDotCom(DnsServerNameDotCom),
+    NameSilo(DnsServerCloud),
+    Netcup(DnsServerNetcup),
+    Netlify(DnsServerCloud),
+    Nifcloud(DnsServerNifcloud),
+    Ns1(DnsServerCloud),
+    OracleCloud(DnsServerOracleCloud),
+    Plesk(DnsServerPlesk),
+    Safedns(DnsServerCloud),
+    Scaleway(DnsServerCloud),
+    TencentCloud(DnsServerTencentCloud),
+    Transip(DnsServerTransip),
+    UltraDns(DnsServerUltraDns),
+    Vercel(DnsServerVercel),
+    Volcengine(DnsServerVolcengine),
+    Vultr(DnsServerCloud),
+    WebSupport(DnsServerWebSupport),
+    YandexCloud(DnsServerYandexCloud),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerAlidns {
+    #[serde(rename = "accessKey")]
+    pub access_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "region")]
+    pub region: Option<String>,
+    #[serde(rename = "securityToken")]
+    pub security_token: SecretKeyOptional,
+    #[serde(rename = "line")]
+    pub line: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerAutodns {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "context")]
+    pub context: Option<u64>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerAzureDns {
+    #[serde(rename = "tenantId")]
+    pub tenant_id: String,
+    #[serde(rename = "clientId")]
+    pub client_id: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: SecretKey,
+    #[serde(rename = "subscriptionId")]
+    pub subscription_id: String,
+    #[serde(rename = "resourceGroup")]
+    pub resource_group: String,
+    #[serde(rename = "environment")]
+    pub environment: AzureEnvironment,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerBaiduCloud {
+    #[serde(rename = "accessKey")]
+    pub access_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerBluecatV2 {
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "configName")]
+    pub config_name: String,
+    #[serde(rename = "viewName")]
+    pub view_name: String,
+    #[serde(rename = "skipDeploy")]
+    pub skip_deploy: bool,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1362,7 +1564,7 @@ pub enum DnsServer {
 pub enum DnsServerBootstrap {
     Manual,
     Tsig(DnsServerTsig),
-    Sig0(DnsServerSig0),
+    Deprecated1,
     Cloudflare(DnsServerCloudflare),
     DigitalOcean(DnsServerCloud),
     DeSEC(DnsServerCloud),
@@ -1373,6 +1575,89 @@ pub enum DnsServerBootstrap {
     Spaceship(DnsServerSpaceship),
     Route53(DnsServerRoute53),
     GoogleCloudDns(DnsServerGoogleCloudDns),
+    Alidns(DnsServerAlidns),
+    ArvanCloud(DnsServerCloud),
+    Autodns(DnsServerAutodns),
+    AzureDns(DnsServerAzureDns),
+    BaiduCloud(DnsServerBaiduCloud),
+    BluecatV2(DnsServerBluecatV2),
+    ClouDns(DnsServerClouDns),
+    Constellix(DnsServerConstellix),
+    Cpanel(DnsServerCpanel),
+    Ddnss(DnsServerCloud),
+    DnsMadeEasy(DnsServerDnsMadeEasy),
+    Domeneshop(DnsServerDomeneshop),
+    Dreamhost(DnsServerCloud),
+    DuckDns(DnsServerCloud),
+    Dynu(DnsServerCloud),
+    EasyDns(DnsServerEasyDns),
+    EdgeDns(DnsServerEdgeDns),
+    Exoscale(DnsServerExoscale),
+    FreeMyIp(DnsServerCloud),
+    GandiV5(DnsServerCloud),
+    Gcore(DnsServerCloud),
+    Glesys(DnsServerGlesys),
+    Godaddy(DnsServerGodaddy),
+    Hetzner(DnsServerCloud),
+    HostingDe(DnsServerCloud),
+    Hostinger(DnsServerCloud),
+    HuaweiCloud(DnsServerHuaweiCloud),
+    Hurricane(DnsServerHurricane),
+    IbmCloud(DnsServerIbmCloud),
+    Infoblox(DnsServerInfoblox),
+    Infomaniak(DnsServerCloud),
+    Inwx(DnsServerInwx),
+    Ionos(DnsServerCloud),
+    Ipv64(DnsServerCloud),
+    Joker(DnsServerJoker),
+    Lightsail(DnsServerLightsail),
+    Linode(DnsServerCloud),
+    LuaDns(DnsServerLuaDns),
+    MythicBeasts(DnsServerMythicBeasts),
+    Namecheap(DnsServerNamecheap),
+    NameDotCom(DnsServerNameDotCom),
+    NameSilo(DnsServerCloud),
+    Netcup(DnsServerNetcup),
+    Netlify(DnsServerCloud),
+    Nifcloud(DnsServerNifcloud),
+    Ns1(DnsServerCloud),
+    OracleCloud(DnsServerOracleCloud),
+    Plesk(DnsServerPlesk),
+    Safedns(DnsServerCloud),
+    Scaleway(DnsServerCloud),
+    TencentCloud(DnsServerTencentCloud),
+    Transip(DnsServerTransip),
+    UltraDns(DnsServerUltraDns),
+    Vercel(DnsServerVercel),
+    Volcengine(DnsServerVolcengine),
+    Vultr(DnsServerCloud),
+    WebSupport(DnsServerWebSupport),
+    YandexCloud(DnsServerYandexCloud),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerClouDns {
+    #[serde(rename = "authId")]
+    pub auth_id: Option<String>,
+    #[serde(rename = "subAuthId")]
+    pub sub_auth_id: Option<String>,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1399,8 +1684,77 @@ pub struct DnsServerCloud {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DnsServerCloudflare {
-    #[serde(rename = "email")]
-    pub email: Option<String>,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerConstellix {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerCpanel {
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "token")]
+    pub token: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerDnsMadeEasy {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
     #[serde(rename = "secret")]
     pub secret: SecretKey,
     #[serde(rename = "description")]
@@ -1426,6 +1780,148 @@ pub struct DnsServerDnsimple {
     pub auth_token: SecretKey,
     #[serde(rename = "accountIdentifier")]
     pub account_identifier: String,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerDomeneshop {
+    #[serde(rename = "authToken")]
+    pub auth_token: String,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerEasyDns {
+    #[serde(rename = "token")]
+    pub token: String,
+    #[serde(rename = "key")]
+    pub key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerEdgeDns {
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "clientToken")]
+    pub client_token: String,
+    #[serde(rename = "clientSecret")]
+    pub client_secret: SecretKey,
+    #[serde(rename = "accessToken")]
+    pub access_token: SecretKey,
+    #[serde(rename = "accountSwitchKey")]
+    pub account_switch_key: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerExoscale {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerGlesys {
+    #[serde(rename = "apiUser")]
+    pub api_user: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerGodaddy {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
     #[serde(rename = "secret")]
     pub secret: SecretKey,
     #[serde(rename = "description")]
@@ -1475,6 +1971,360 @@ pub struct DnsServerGoogleCloudDns {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct DnsServerHuaweiCloud {
+    #[serde(rename = "accessKey")]
+    pub access_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "region")]
+    pub region: String,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerHurricane {
+    #[serde(rename = "credentials")]
+    pub credentials: List<HurricaneCredential>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerIbmCloud {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerInfoblox {
+    #[serde(rename = "host")]
+    pub host: String,
+    #[serde(rename = "port")]
+    pub port: Option<String>,
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "wapiVersion")]
+    pub wapi_version: Option<String>,
+    #[serde(rename = "dnsView")]
+    pub dns_view: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerInwx {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "sharedSecret")]
+    pub shared_secret: SecretKeyOptional,
+    #[serde(rename = "sandbox")]
+    pub sandbox: bool,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerJoker {
+    #[serde(rename = "auth")]
+    pub auth: JokerAuth,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerLightsail {
+    #[serde(rename = "accessKeyId")]
+    pub access_key_id: String,
+    #[serde(rename = "secretAccessKey")]
+    pub secret_access_key: SecretKey,
+    #[serde(rename = "sessionToken")]
+    pub session_token: SecretKeyOptional,
+    #[serde(rename = "region")]
+    pub region: Option<String>,
+    #[serde(rename = "domain")]
+    pub domain: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerLuaDns {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "authToken")]
+    pub auth_token: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerMythicBeasts {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerNameDotCom {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "authToken")]
+    pub auth_token: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerNamecheap {
+    #[serde(rename = "apiUser")]
+    pub api_user: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretKey,
+    #[serde(rename = "clientIp")]
+    pub client_ip: String,
+    #[serde(rename = "username")]
+    pub username: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerNetcup {
+    #[serde(rename = "customerNumber")]
+    pub customer_number: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerNifcloud {
+    #[serde(rename = "accessKey")]
+    pub access_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerOracleCloud {
+    #[serde(rename = "tenancyOcid")]
+    pub tenancy_ocid: String,
+    #[serde(rename = "userOcid")]
+    pub user_ocid: String,
+    #[serde(rename = "fingerprint")]
+    pub fingerprint: String,
+    #[serde(rename = "privateKeyPem")]
+    pub private_key_pem: SecretText,
+    #[serde(rename = "privateKeyPassword")]
+    pub private_key_password: SecretKeyOptional,
+    #[serde(rename = "region")]
+    pub region: String,
+    #[serde(rename = "compartmentOcid")]
+    pub compartment_ocid: String,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DnsServerOvh {
     #[serde(rename = "applicationKey")]
     pub application_key: String,
@@ -1502,13 +2352,34 @@ pub struct DnsServerOvh {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct DnsServerPlesk {
+    #[serde(rename = "baseUrl")]
+    pub base_url: String,
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DnsServerPorkbun {
     #[serde(rename = "apiKey")]
     pub api_key: String,
     #[serde(rename = "secretApiKey")]
     pub secret_api_key: SecretKey,
-    #[serde(rename = "secret")]
-    pub secret: SecretKey,
     #[serde(rename = "description")]
     pub description: String,
     #[serde(rename = "memberTenantId")]
@@ -1558,21 +2429,11 @@ pub struct DnsServerRoute53 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DnsServerSig0 {
-    #[serde(rename = "host")]
-    pub host: IpAddr,
-    #[serde(rename = "port")]
-    pub port: u64,
-    #[serde(rename = "publicKey")]
-    pub public_key: String,
-    #[serde(rename = "key")]
-    pub key: SecretText,
-    #[serde(rename = "signerName")]
-    pub signer_name: String,
-    #[serde(rename = "protocol")]
-    pub protocol: IpProtocol,
-    #[serde(rename = "sig0Algorithm")]
-    pub sig0_algorithm: Sig0Algorithm,
+pub struct DnsServerSpaceship {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
     #[serde(rename = "description")]
     pub description: String,
     #[serde(rename = "memberTenantId")]
@@ -1591,11 +2452,38 @@ pub struct DnsServerSig0 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct DnsServerSpaceship {
-    #[serde(rename = "apiKey")]
-    pub api_key: String,
-    #[serde(rename = "secret")]
-    pub secret: SecretKey,
+pub struct DnsServerTencentCloud {
+    #[serde(rename = "secretId")]
+    pub secret_id: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "region")]
+    pub region: Option<String>,
+    #[serde(rename = "sessionToken")]
+    pub session_token: SecretKeyOptional,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerTransip {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "privateKeyPem")]
+    pub private_key_pem: SecretText,
     #[serde(rename = "description")]
     pub description: String,
     #[serde(rename = "memberTenantId")]
@@ -1627,6 +2515,129 @@ pub struct DnsServerTsig {
     pub protocol: IpProtocol,
     #[serde(rename = "tsigAlgorithm")]
     pub tsig_algorithm: TsigAlgorithm,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerUltraDns {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
+    #[serde(rename = "endpoint")]
+    pub endpoint: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerVercel {
+    #[serde(rename = "authToken")]
+    pub auth_token: SecretKey,
+    #[serde(rename = "teamId")]
+    pub team_id: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerVolcengine {
+    #[serde(rename = "accessKey")]
+    pub access_key: String,
+    #[serde(rename = "secretKey")]
+    pub secret_key: SecretKey,
+    #[serde(rename = "region")]
+    pub region: Option<String>,
+    #[serde(rename = "host")]
+    pub host: Option<String>,
+    #[serde(rename = "scheme")]
+    pub scheme: Option<String>,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerWebSupport {
+    #[serde(rename = "apiKey")]
+    pub api_key: String,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "memberTenantId")]
+    pub member_tenant_id: Option<Id>,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "ttl")]
+    pub ttl: Duration,
+    #[serde(rename = "pollingInterval")]
+    pub polling_interval: Duration,
+    #[serde(rename = "propagationTimeout")]
+    pub propagation_timeout: Duration,
+    #[serde(rename = "propagationDelay")]
+    pub propagation_delay: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsServerYandexCloud {
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretText,
+    #[serde(rename = "folderId")]
+    pub folder_id: String,
     #[serde(rename = "description")]
     pub description: String,
     #[serde(rename = "memberTenantId")]
@@ -1775,6 +2786,8 @@ pub enum EncryptionAtRest {
     Disabled,
     Aes128(EncryptionSettings),
     Aes256(EncryptionSettings),
+    Aes256Gcm(EncryptionSettings),
+    ChaCha20Poly1305(EncryptionSettings),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1922,6 +2935,8 @@ pub struct Http {
     pub response_headers: VecMap<String, String>,
     #[serde(rename = "useXForwarded")]
     pub use_x_forwarded: bool,
+    #[serde(rename = "redirectRoot")]
+    pub redirect_root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2026,6 +3041,15 @@ pub enum HttpLookupFormat {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct HurricaneCredential {
+    #[serde(rename = "zone")]
+    pub zone: String,
+    #[serde(rename = "secret")]
+    pub secret: SecretKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Imap {
     #[serde(rename = "allowPlainTextAuth")]
     pub allow_plain_text_auth: bool,
@@ -2052,6 +3076,7 @@ pub enum InMemoryStore {
     Sharded(ShardedInMemoryStore),
     Redis(RedisStore),
     RedisCluster(RedisClusterStore),
+    RedisSentinel(RedisSentinelStore),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2059,6 +3084,7 @@ pub enum InMemoryStore {
 pub enum InMemoryStoreBase {
     Redis(RedisStore),
     RedisCluster(RedisClusterStore),
+    RedisSentinel(RedisSentinelStore),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2120,6 +3146,29 @@ pub struct Jmap {
     pub websocket_timeout: Duration,
     #[serde(rename = "maxSubscriptions")]
     pub max_subscriptions: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "@type")]
+pub enum JokerAuth {
+    ApiKey(JokerAuthApiKey),
+    UsernamePassword(JokerAuthUsernamePassword),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JokerAuthApiKey {
+    #[serde(rename = "apiKey")]
+    pub api_key: SecretKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JokerAuthUsernamePassword {
+    #[serde(rename = "username")]
+    pub username: String,
+    #[serde(rename = "password")]
+    pub password: SecretKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2212,6 +3261,7 @@ pub enum LookupStore {
     Sharded(ShardedInMemoryStore),
     Redis(RedisStore),
     RedisCluster(RedisClusterStore),
+    RedisSentinel(RedisSentinelStore),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3282,6 +4332,35 @@ pub struct RedisClusterStore {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct RedisSentinelStore {
+    #[serde(rename = "urls")]
+    pub urls: Map<String>,
+    #[serde(rename = "serviceName")]
+    pub service_name: String,
+    #[serde(rename = "timeout")]
+    pub timeout: Duration,
+    #[serde(rename = "authUsername")]
+    pub auth_username: Option<String>,
+    #[serde(rename = "authSecret")]
+    pub auth_secret: SecretKeyOptional,
+    #[serde(rename = "sentinelUsername")]
+    pub sentinel_username: Option<String>,
+    #[serde(rename = "sentinelSecret")]
+    pub sentinel_secret: SecretKeyOptional,
+    #[serde(rename = "protocolVersion")]
+    pub protocol_version: RedisProtocol,
+    #[serde(rename = "poolMaxConnections")]
+    pub pool_max_connections: u64,
+    #[serde(rename = "poolTimeoutCreate")]
+    pub pool_timeout_create: Option<Duration>,
+    #[serde(rename = "poolTimeoutWait")]
+    pub pool_timeout_wait: Option<Duration>,
+    #[serde(rename = "poolTimeoutRecycle")]
+    pub pool_timeout_recycle: Option<Duration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RedisStore {
     #[serde(rename = "url")]
     pub url: String,
@@ -3370,6 +4449,8 @@ pub struct S3Store {
     pub key_prefix: Option<String>,
     #[serde(rename = "allowInvalidCerts")]
     pub allow_invalid_certs: bool,
+    #[serde(rename = "verifyAfterWrite")]
+    pub verify_after_write: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

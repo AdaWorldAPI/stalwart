@@ -10,8 +10,10 @@ use deadpool::{
     managed::{Manager, Pool},
 };
 use redis::{
-    Client, ProtocolVersion,
+    Client, IntoConnectionInfo, ProtocolVersion,
     cluster::{ClusterClient, ClusterClientBuilder},
+    cluster_read_routing::RandomReplicaStrategy,
+    sentinel::{SentinelClient, SentinelClientBuilder, SentinelServerType},
 };
 use registry::{
     schema::{enums::RedisProtocol, structs},
@@ -37,9 +39,15 @@ pub struct RedisClusterConnectionManager {
     timeout: std::time::Duration,
 }
 
+pub struct RedisSentinelConnectionManager {
+    pub client: tokio::sync::Mutex<SentinelClient>,
+    timeout: std::time::Duration,
+}
+
 pub enum RedisPool {
     Single(Pool<RedisConnectionManager>),
     Cluster(Pool<RedisClusterConnectionManager>),
+    Sentinel(Pool<RedisSentinelConnectionManager>),
 }
 
 impl RedisStore {
@@ -77,7 +85,7 @@ impl RedisStore {
             builder = builder.min_retry_wait(value.as_millis());
         }
         if config.read_from_replicas {
-            builder = builder.read_from_replicas();
+            builder = builder.read_routing_strategy(RandomReplicaStrategy);
         }
         if matches!(config.protocol_version, RedisProtocol::Resp3) {
             builder = builder.use_protocol(ProtocolVersion::RESP3);
@@ -91,6 +99,60 @@ impl RedisStore {
             pool: RedisPool::Cluster(build_pool(
                 RedisClusterConnectionManager {
                     client,
+                    timeout: config.timeout.into_inner(),
+                },
+                config.pool_max_connections,
+                config.pool_timeout_create,
+                config.pool_timeout_wait,
+                config.pool_timeout_recycle,
+            )?),
+        })))
+    }
+
+    pub async fn open_sentinel(
+        config: structs::RedisSentinelStore,
+    ) -> Result<InMemoryStore, String> {
+        let mut sentinels = Vec::with_capacity(config.urls.len());
+        for url in config.urls {
+            let info = url
+                .into_connection_info()
+                .map_err(|err| format!("Invalid Redis Sentinel URL: {err}"))?;
+            sentinels.push(info.addr().clone());
+        }
+
+        let mut builder =
+            SentinelClientBuilder::new(sentinels, config.service_name, SentinelServerType::Master)
+                .map_err(|err| format!("Failed to create Redis Sentinel client: {err:?}"))?;
+
+        if let Some(value) = config.auth_username {
+            builder = builder.set_client_to_redis_username(value);
+        }
+        if let Some(value) = config.auth_secret.secret().await?.map(|v| v.into_owned()) {
+            builder = builder.set_client_to_redis_password(value);
+        }
+        if let Some(value) = config.sentinel_username {
+            builder = builder.set_client_to_sentinel_username(value);
+        }
+        if let Some(value) = config
+            .sentinel_secret
+            .secret()
+            .await?
+            .map(|v| v.into_owned())
+        {
+            builder = builder.set_client_to_sentinel_password(value);
+        }
+        if matches!(config.protocol_version, RedisProtocol::Resp3) {
+            builder = builder.set_client_to_redis_protocol(ProtocolVersion::RESP3);
+        }
+
+        let client = builder
+            .build()
+            .map_err(|err| format!("Failed to open Redis Sentinel client: {err:?}"))?;
+
+        Ok(InMemoryStore::Redis(Arc::new(RedisStore {
+            pool: RedisPool::Sentinel(build_pool(
+                RedisSentinelConnectionManager {
+                    client: tokio::sync::Mutex::new(client),
                     timeout: config.timeout.into_inner(),
                 },
                 config.pool_max_connections,
@@ -129,6 +191,7 @@ impl std::fmt::Debug for RedisPool {
         match self {
             Self::Single(_) => f.debug_tuple("Single").finish(),
             Self::Cluster(_) => f.debug_tuple("Cluster").finish(),
+            Self::Sentinel(_) => f.debug_tuple("Sentinel").finish(),
         }
     }
 }

@@ -21,7 +21,7 @@ use jmap_proto::{
     error::set::SetError,
     method::set::{SetRequest, SetResponse},
     object::calendar::{self, CalendarProperty, CalendarValue, IncludeInAvailability},
-    request::{IntoValid, reference::MaybeIdReference},
+    request::{MaybeInvalid, reference::MaybeIdReference},
     types::state::State,
 };
 use jmap_tools::{JsonPointerItem, Key, Map, Value};
@@ -36,6 +36,7 @@ use types::{
     acl::Acl,
     collection::{Collection, SyncCollection},
     field::PrincipalField,
+    id::Id,
 };
 
 pub trait CalendarSet: Sync + Send {
@@ -63,7 +64,7 @@ impl CalendarSet for Server {
             )
             .await?;
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
         let is_shared = access_token.is_shared(account_id);
         let mut set_default = None;
 
@@ -94,7 +95,7 @@ impl CalendarSet for Server {
             };
 
             // Process changes
-            if let Err(err) = update_calendar(object, &mut calendar, access_token) {
+            if let Err(err) = update_calendar(None, object, &mut calendar, access_token) {
                 response.not_created.append(id, err);
                 continue 'create;
             }
@@ -137,7 +138,14 @@ impl CalendarSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -168,13 +176,14 @@ impl CalendarSet for Server {
                 .caused_by(trc::location!())?;
 
             // Apply changes
-            let has_acl_changes = match update_calendar(object, &mut new_calendar, access_token) {
-                Ok(has_acl_changes_) => has_acl_changes_,
-                Err(err) => {
-                    response.not_updated.append(id, err);
-                    continue 'update;
-                }
-            };
+            let has_acl_changes =
+                match update_calendar(Some(id), object, &mut new_calendar, access_token) {
+                    Ok(has_acl_changes_) => has_acl_changes_,
+                    Err(err) => {
+                        response.not_updated.append(id, err);
+                        continue 'update;
+                    }
+                };
 
             // Validate ACL
             if is_shared {
@@ -282,12 +291,15 @@ impl CalendarSet for Server {
                 destroy_parents.insert(document_id);
 
                 // Delete record
+                let delete_path = cache
+                    .container_resource_path_by_id(document_id)
+                    .map(|resource| cache.format_resource(resource));
                 DestroyArchive(calendar)
                     .delete(
                         access_token.account_tenant_ids(),
                         account_id,
                         document_id,
-                        None,
+                        delete_path,
                         &mut batch,
                     )
                     .caused_by(trc::location!())?;
@@ -397,6 +409,7 @@ impl CalendarSet for Server {
 }
 
 fn update_calendar(
+    expected_id: Option<Id>,
     updates: Value<'_, CalendarProperty, CalendarValue>,
     calendar: &mut Calendar,
     access_token: &AccessToken,
@@ -541,6 +554,13 @@ fn update_calendar(
                             .with_property(CalendarProperty::Pointer(pointer))
                             .with_description("Field could not be patched."));
                     }
+                }
+            }
+            (CalendarProperty::Id, value) => {
+                if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                    return Err(SetError::invalid_properties()
+                        .with_property(CalendarProperty::Id)
+                        .with_description("The id property is immutable."));
                 }
             }
             (property, _) => {

@@ -11,14 +11,10 @@ use common::{
     config::smtp::queue::{ConnectionStrategy, HostOrIp, IpAndHost, MxConfig},
     expr::functions::ResolveVariable,
 };
-use mail_auth::{IpLookupStrategy, MX};
+use mail_auth::{IpLookupStrategy, MX, RecordSet};
 use rand::{Rng, seq::SliceRandom};
 use registry::schema::enums::ExpressionVariable;
 use std::{future::Future, net::IpAddr, sync::Arc};
-
-pub struct IpLookupResult {
-    pub remote_ips: Vec<IpAddr>,
-}
 
 pub trait DnsLookup: Sync + Send {
     fn ip_lookup(
@@ -32,7 +28,7 @@ pub trait DnsLookup: Sync + Send {
         &self,
         remote_host: &NextHop<'_>,
         envelope: &impl ResolveVariable,
-    ) -> impl Future<Output = Result<IpLookupResult, Status<HostResponse<Box<str>>, ErrorDetails>>> + Send;
+    ) -> impl Future<Output = Result<Vec<IpAddr>, Status<HostResponse<Box<str>>, ErrorDetails>>> + Send;
 }
 
 impl DnsLookup for Server {
@@ -57,7 +53,7 @@ impl DnsLookup for Server {
                 .ipv4_lookup(key, Some(&self.inner.cache.dns_ipv4))
                 .await
             {
-                Ok(addrs) => addrs,
+                Ok(addrs) => addrs.rrset,
                 Err(_) if has_ipv6 => Arc::new([]),
                 Err(err) => return Err(err),
             }
@@ -74,7 +70,7 @@ impl DnsLookup for Server {
                 .ipv6_lookup(key, Some(&self.inner.cache.dns_ipv6))
                 .await
             {
-                Ok(addrs) => addrs,
+                Ok(addrs) => addrs.rrset,
                 Err(_) if !ipv4_addrs.is_empty() => Arc::new([]),
                 Err(err) => return Err(err),
             };
@@ -110,7 +106,7 @@ impl DnsLookup for Server {
         &self,
         remote_host: &NextHop<'_>,
         envelope: &impl ResolveVariable,
-    ) -> Result<IpLookupResult, Status<HostResponse<Box<str>>, ErrorDetails>> {
+    ) -> Result<Vec<IpAddr>, Status<HostResponse<Box<str>>, ErrorDetails>> {
         let mut remote_ips = match remote_host.fqdn_hostname() {
             HostOrIp::Host(hostname) => self
                 .ip_lookup(
@@ -162,7 +158,7 @@ impl DnsLookup for Server {
                 }
             }
 
-            Ok(IpLookupResult { remote_ips })
+            Ok(remote_ips)
         } else {
             Err(Status::TemporaryFailure(ErrorDetails {
                 entity: remote_host.hostname().into(),
@@ -207,17 +203,17 @@ pub trait ToNextHop {
     ) -> Option<Vec<NextHop<'x>>>;
 }
 
-impl ToNextHop for Arc<[MX]> {
+impl ToNextHop for RecordSet<MX> {
     fn to_remote_hosts<'x, 'y: 'x>(
         &'x self,
         domain: &'y str,
         config: &'x MxConfig,
     ) -> Option<Vec<NextHop<'x>>> {
-        if !self.is_empty() {
+        if !self.rrset.is_empty() {
             // Obtain max number of MX hosts to process
             let mut remote_hosts = Vec::with_capacity(config.max_mx);
 
-            'outer: for mx in self.iter() {
+            'outer: for mx in self.rrset.iter() {
                 if mx.exchanges.len() > 1 {
                     let mut slice = mx.exchanges.iter().collect::<Vec<_>>();
                     slice.shuffle(&mut rand::rng());
@@ -225,6 +221,7 @@ impl ToNextHop for Arc<[MX]> {
                         remote_hosts.push(NextHop::MX {
                             host: remote_host.as_ref(),
                             is_implicit: false,
+                            dnssec_status: self.dnssec_status,
                             config,
                         });
                         if remote_hosts.len() == config.max_mx {
@@ -239,6 +236,7 @@ impl ToNextHop for Arc<[MX]> {
                     remote_hosts.push(NextHop::MX {
                         host: remote_host.as_ref(),
                         is_implicit: false,
+                        dnssec_status: self.dnssec_status,
                         config,
                     });
                     if remote_hosts.len() == config.max_mx {
@@ -253,6 +251,7 @@ impl ToNextHop for Arc<[MX]> {
             vec![NextHop::MX {
                 host: domain,
                 is_implicit: true,
+                dnssec_status: self.dnssec_status,
                 config,
             }]
             .into()

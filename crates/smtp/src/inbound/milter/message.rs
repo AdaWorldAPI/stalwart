@@ -8,6 +8,7 @@ use super::{Action, Error, Macros, Modification};
 use crate::{
     core::{Session, SessionAddress, SessionData},
     inbound::{FilterResponse, milter::MilterClient},
+    queue::QueueId,
 };
 use common::{
     DAEMON_NAME,
@@ -31,6 +32,7 @@ impl<T: SessionStream> Session<T> {
         &self,
         stage: Stage,
         message: Option<&AuthenticatedMessage<'_>>,
+        queue_id: Option<QueueId>,
     ) -> Result<Vec<Modification>, FilterResponse> {
         let milters = &self.server.core.smtp.session.milters;
         if milters.is_empty() {
@@ -88,6 +90,7 @@ impl<T: SessionStream> Session<T> {
                             Action::Accept | Action::Continue => unreachable!(),
                         }),
                         SpanId = self.data.session_id,
+                        QueueId = queue_id,
                         Id = milter.id.to_string(),
                         Elapsed = time.elapsed(),
                     );

@@ -308,7 +308,7 @@ async fn insert_safe_defaults(bp: &mut Bootstrap) -> trc::Result<()> {
                 ip_lookup_strategy: MtaIpStrategy::V4ThenV6,
                 max_multihomed: 2,
                 max_mx_hosts: 2,
-                name: "default".into(),
+                name: "mx".into(),
             }),
             MtaRoute::Local(MtaRouteCommon {
                 description: "Local delivery route".to_string().into(),

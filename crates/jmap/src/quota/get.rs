@@ -29,7 +29,7 @@ impl QuotaGet for Server {
         mut request: GetRequest<Quota>,
         access_token: &AccessToken,
     ) -> trc::Result<GetResponse<Quota>> {
-        let ids = request.unwrap_ids(self.core.jmap.get_max_objects)?;
+        let (ids, not_found_ids) = request.unwrap_ids(self.core.jmap.get_max_objects)?;
         let properties = request.unwrap_properties(&[
             QuotaProperty::Id,
             QuotaProperty::ResourceType,
@@ -58,7 +58,7 @@ impl QuotaGet for Server {
             account_id: request.account_id.into(),
             state: State::Initial.into(),
             list: Vec::with_capacity(ids.len()),
-            not_found: vec![],
+            not_found: not_found_ids,
         };
 
         let account = if account_id == access_token.account_id() {
@@ -71,7 +71,7 @@ impl QuotaGet for Server {
             // Obtain the sieve script object
             let document_id = id.document_id();
             if !quota_ids.contains(&document_id) {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             }
 
@@ -81,7 +81,7 @@ impl QuotaGet for Server {
                     QuotaProperty::Id => Value::Element(id.into()),
                     QuotaProperty::ResourceType => "octets".to_string().into(),
                     QuotaProperty::Used => {
-                        (self.get_used_quota_account(account_id).await? as u64).into()
+                        (self.get_used_quota_account(account_id).await?.max(0) as u64).into()
                     }
                     QuotaProperty::HardLimit => account.as_ref().disk_quota().into(),
                     QuotaProperty::Scope => "account".to_string().into(),

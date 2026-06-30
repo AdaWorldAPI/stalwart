@@ -99,6 +99,10 @@ pub enum CacheInvalidation {
     List(u32),
     DomainLogo(u32),
     TenantLogo(u32),
+    EmailNegative {
+        domain_id: u32,
+        local_part_hash: u32,
+    },
 }
 
 #[derive(Debug)]

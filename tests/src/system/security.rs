@@ -7,6 +7,7 @@
 use crate::{
     system::authentication::validate_password_with_ip,
     utils::{
+        http::HttpRequest,
         imap::{ImapConnection, Type},
         registry::UnwrapRegistryId,
         server::TestServer,
@@ -271,6 +272,8 @@ pub async fn test(test: &mut TestServer) {
 
     // Concurrent requests check
     let client = Arc::new(client);
+    let raw_http =
+        HttpRequest::with_credentials(8899, "user@example.org", "this is a very strong password");
     for _ in 0..8 {
         let client_ = client.clone();
         tokio::spawn(async move {
@@ -283,14 +286,48 @@ pub async fn test(test: &mut TestServer) {
         });
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(matches!(
-        client
-            .mailbox_query(
-                mailbox::query::Filter::name("__sleep").into(),
-                [mailbox::query::Comparator::name()].into(),
-            )
-            .await,
-            Err(jmap_client::Error::Problem(err)) if err.status() == Some(400)));
+    let body = serde_json::to_vec(&json!({
+        "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        "methodCalls": [
+            ["Mailbox/query", {
+                "accountId": user_id.to_string(),
+                "filter": { "name": "__sleep" }
+            }, "c1"]
+        ]
+    }))
+    .unwrap();
+    let resp = raw_http
+        .send_full(
+            hyper::Method::POST,
+            "/jmap/",
+            Some(body),
+            Some("application/json"),
+        )
+        .await;
+    assert_eq!(
+        resp.status.as_u16(),
+        400,
+        "concurrent-requests body: {}",
+        resp.body
+    );
+    let policy = resp
+        .rate_limit_policy()
+        .unwrap_or_else(|| panic!("missing RateLimit-Policy header on {:?}", resp.headers));
+    assert!(
+        policy.contains("\"concurrent-requests\"") && policy.contains("q=8"),
+        "RateLimit-Policy = {policy}"
+    );
+    assert!(
+        policy.contains(r#"qu="concurrent-requests""#),
+        "RateLimit-Policy = {policy}"
+    );
+    let state = resp
+        .rate_limit()
+        .unwrap_or_else(|| panic!("missing RateLimit header on {:?}", resp.headers));
+    assert!(
+        state.contains("\"concurrent-requests\"") && state.contains("r=0"),
+        "RateLimit = {state}"
+    );
 
     // Wait for sleep to be done
     tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -303,9 +340,37 @@ pub async fn test(test: &mut TestServer) {
         });
     }
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(matches!(
-        client.upload(None, b"sleep".to_vec(), None).await,
-        Err(jmap_client::Error::Problem(err)) if err.status() == Some(400)));
+    let resp = raw_http
+        .send_full(
+            hyper::Method::POST,
+            &format!("/jmap/upload/{user_id}"),
+            Some(b"sleep".to_vec()),
+            Some("application/octet-stream"),
+        )
+        .await;
+    assert_eq!(
+        resp.status.as_u16(),
+        400,
+        "concurrent-uploads body: {}",
+        resp.body
+    );
+    let policy = resp
+        .rate_limit_policy()
+        .unwrap_or_else(|| panic!("missing RateLimit-Policy header on {:?}", resp.headers));
+    assert!(
+        policy.contains("\"concurrent-uploads\"") && policy.contains("q=4"),
+        "RateLimit-Policy = {policy}"
+    );
+    let state = resp
+        .rate_limit()
+        .unwrap_or_else(|| panic!("missing RateLimit header on {:?}", resp.headers));
+    assert!(
+        state.contains("\"concurrent-uploads\"") && state.contains("r=0"),
+        "RateLimit = {state}"
+    );
+
+    // Wait for sleep to be done before continuing
+    tokio::time::sleep(Duration::from_millis(1000)).await;
 
     // Disable X-Forwarded-For processing
     admin

@@ -14,9 +14,9 @@ use registry::{
         prelude::Object,
         structs::{
             BlobStore, DataStore, ElasticSearchStore, FileSystemStore, FoundationDbStore, HttpAuth,
-            HttpAuthBasic, InMemoryStore, MeilisearchStore, MySqlStore, PostgreSqlStore,
-            RedisStore, RocksDbStore, S3Store, S3StoreCustomRegion, S3StoreRegion, SearchStore,
-            SecretKey, SecretKeyOptional, SecretKeyValue, SqliteStore,
+            HttpAuthBasic, HttpAuthBearer, InMemoryStore, MeilisearchStore, MySqlStore,
+            PostgreSqlStore, RedisStore, RocksDbStore, S3Store, S3StoreCustomRegion, S3StoreRegion,
+            SearchStore, SecretKey, SecretKeyOptional, SecretKeyValue, SqliteStore,
         },
     },
     types::{EnumImpl, duration::Duration},
@@ -35,21 +35,21 @@ pub trait RegistryEnvStores {
 impl RegistryEnvStores for RegistryStore {
     async fn insert_stores_from_env(&self) {
         let path = self.path().as_os_str().to_str().unwrap();
-        let search_store = std::env::var("SEARCH_STORE")
-            .map(|store| SearchStoreType::parse(&store).expect("Invalid store type"))
-            .map(|store| build_search_store(store, path))
-            .map(Object::from)
-            .ok();
-        let blob_store = std::env::var("BLOB_STORE")
-            .map(|store| BlobStoreType::parse(&store).expect("Invalid store type"))
-            .map(|store| build_blob_store(store, path))
-            .map(Object::from)
-            .ok();
-        let in_memory = std::env::var("MEMORY_STORE")
-            .map(|store| InMemoryStoreType::parse(&store).expect("Invalid store type"))
-            .map(|store| build_in_memory_store(store, path))
-            .map(Object::from)
-            .ok();
+        let mut search_store = None;
+        if let Ok(store) = std::env::var("SEARCH_STORE") {
+            let store = SearchStoreType::parse(&store).expect("Invalid store type");
+            search_store = Some(Object::from(build_search_store(store, path).await));
+        }
+        let mut blob_store = None;
+        if let Ok(store) = std::env::var("BLOB_STORE") {
+            let store = BlobStoreType::parse(&store).expect("Invalid store type");
+            blob_store = Some(Object::from(build_blob_store(store, path).await));
+        }
+        let mut in_memory = None;
+        if let Ok(store) = std::env::var("MEMORY_STORE") {
+            let store = InMemoryStoreType::parse(&store).expect("Invalid store type");
+            in_memory = Some(Object::from(build_in_memory_store(store, path).await));
+        }
 
         for store in [search_store, blob_store, in_memory].into_iter().flatten() {
             self.write(RegistryWrite::insert(&store))
@@ -60,7 +60,7 @@ impl RegistryEnvStores for RegistryStore {
     }
 }
 
-pub fn build_data_store(typ: DataStoreType, path: &str) -> DataStore {
+pub async fn build_data_store(typ: DataStoreType, path: &str) -> DataStore {
     match typ {
         DataStoreType::RocksDb => DataStore::RocksDb(RocksDbStore {
             path: format!("{path}/rocks.db"),
@@ -70,49 +70,61 @@ pub fn build_data_store(typ: DataStoreType, path: &str) -> DataStore {
             path: format!("{path}/sqlite.db"),
             ..Default::default()
         }),
-        DataStoreType::FoundationDb => DataStore::FoundationDb(FoundationDbStore::default()),
-        DataStoreType::PostgreSql => DataStore::PostgreSql(PostgreSqlStore {
-            host: "localhost".into(),
-            port: 5432,
-            auth_username: "stalwart".to_string().into(),
-            auth_secret: SecretKeyOptional::Value(SecretKeyValue {
-                secret: "stalwart".into(),
-            }),
-            database: "stalwart".into(),
-            use_tls: false,
-            allow_invalid_certs: true,
-            ..Default::default()
-        }),
-        DataStoreType::MySql => DataStore::MySql(MySqlStore {
-            host: "localhost".into(),
-            port: 3307,
-            auth_username: "root".to_string().into(),
-            auth_secret: SecretKeyOptional::Value(SecretKeyValue {
-                secret: "password".into(),
-            }),
-            database: "stalwart".into(),
-            use_tls: false,
-            allow_invalid_certs: true,
-            ..Default::default()
-        }),
+        DataStoreType::FoundationDb => {
+            crate::utils::containers::ensure_foundationdb().await;
+            DataStore::FoundationDb(FoundationDbStore::default())
+        }
+        DataStoreType::PostgreSql => {
+            crate::utils::containers::ensure_postgres().await;
+            DataStore::PostgreSql(PostgreSqlStore {
+                host: "localhost".into(),
+                port: 5432,
+                auth_username: "stalwart".to_string().into(),
+                auth_secret: SecretKeyOptional::Value(SecretKeyValue {
+                    secret: "stalwart".into(),
+                }),
+                database: "stalwart".into(),
+                use_tls: false,
+                allow_invalid_certs: true,
+                ..Default::default()
+            })
+        }
+        DataStoreType::MySql => {
+            crate::utils::containers::ensure_mysql().await;
+            DataStore::MySql(MySqlStore {
+                host: "localhost".into(),
+                port: 3307,
+                auth_username: "root".to_string().into(),
+                auth_secret: SecretKeyOptional::Value(SecretKeyValue {
+                    secret: "password".into(),
+                }),
+                database: "stalwart".into(),
+                use_tls: false,
+                allow_invalid_certs: true,
+                ..Default::default()
+            })
+        }
     }
 }
 
-fn build_blob_store(typ: BlobStoreType, path: &str) -> BlobStore {
+async fn build_blob_store(typ: BlobStoreType, path: &str) -> BlobStore {
     match typ {
-        BlobStoreType::S3 => BlobStore::S3(S3Store {
-            access_key: "minioadmin".to_string().into(),
-            bucket: "tmp".into(),
-            region: S3StoreRegion::Custom(S3StoreCustomRegion {
-                custom_endpoint: "http://localhost:9000".into(),
-                custom_region: "eu-central-1".into(),
-            }),
-            secret_key: SecretKeyOptional::Value(SecretKeyValue {
-                secret: "minioadmin".into(),
-            }),
-            allow_invalid_certs: true,
-            ..Default::default()
-        }),
+        BlobStoreType::S3 => {
+            crate::utils::containers::ensure_minio().await;
+            BlobStore::S3(S3Store {
+                access_key: "minioadmin".to_string().into(),
+                bucket: "stalwart".into(),
+                region: S3StoreRegion::Custom(S3StoreCustomRegion {
+                    custom_endpoint: "http://localhost:9000".into(),
+                    custom_region: "eu-central-1".into(),
+                }),
+                secret_key: SecretKeyOptional::Value(SecretKeyValue {
+                    secret: "minioadmin".into(),
+                }),
+                allow_invalid_certs: true,
+                ..Default::default()
+            })
+        }
         BlobStoreType::FileSystem => BlobStore::FileSystem(FileSystemStore {
             path: path.to_string(),
             ..Default::default()
@@ -121,35 +133,49 @@ fn build_blob_store(typ: BlobStoreType, path: &str) -> BlobStore {
     }
 }
 
-fn build_in_memory_store(typ: InMemoryStoreType, _path: &str) -> InMemoryStore {
+async fn build_in_memory_store(typ: InMemoryStoreType, _path: &str) -> InMemoryStore {
     match typ {
-        InMemoryStoreType::Redis => InMemoryStore::Redis(RedisStore {
-            url: "redis://127.0.0.1".into(),
-            ..Default::default()
-        }),
+        InMemoryStoreType::Redis => {
+            crate::utils::containers::ensure_redis().await;
+            InMemoryStore::Redis(RedisStore {
+                url: "redis://127.0.0.1".into(),
+                ..Default::default()
+            })
+        }
         _ => unreachable!(),
     }
 }
 
-fn build_search_store(typ: SearchStoreType, _path: &str) -> SearchStore {
+async fn build_search_store(typ: SearchStoreType, _path: &str) -> SearchStore {
     match typ {
-        SearchStoreType::ElasticSearch => SearchStore::ElasticSearch(ElasticSearchStore {
-            url: "https://localhost:9200".into(),
-            allow_invalid_certs: true,
-            http_auth: HttpAuth::Basic(HttpAuthBasic {
-                username: "elastic".into(),
-                secret: SecretKey::Value(SecretKeyValue {
-                    secret: "changeme".into(),
+        SearchStoreType::ElasticSearch => {
+            crate::utils::containers::ensure_opensearch().await;
+            SearchStore::ElasticSearch(ElasticSearchStore {
+                url: "http://localhost:9200".into(),
+                allow_invalid_certs: true,
+                http_auth: HttpAuth::Basic(HttpAuthBasic {
+                    username: "elastic".into(),
+                    secret: SecretKey::Value(SecretKeyValue {
+                        secret: "changeme".into(),
+                    }),
                 }),
-            }),
-            ..Default::default()
-        }),
-        SearchStoreType::Meilisearch => SearchStore::Meilisearch(MeilisearchStore {
-            url: "http://localhost:7700".into(),
-            allow_invalid_certs: true,
-            poll_interval: Duration::from_millis(100),
-            ..Default::default()
-        }),
+                ..Default::default()
+            })
+        }
+        SearchStoreType::Meilisearch => {
+            crate::utils::containers::ensure_meilisearch().await;
+            SearchStore::Meilisearch(MeilisearchStore {
+                url: "http://localhost:7700".into(),
+                allow_invalid_certs: true,
+                poll_interval: Duration::from_millis(100),
+                http_auth: HttpAuth::Bearer(HttpAuthBearer {
+                    bearer_token: SecretKey::Value(SecretKeyValue {
+                        secret: "stalwart-master-key".into(),
+                    }),
+                }),
+                ..Default::default()
+            })
+        }
         _ => unreachable!(),
     }
 }

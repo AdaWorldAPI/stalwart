@@ -45,7 +45,7 @@ pub async fn test(test: &TestServer) {
     ece_roundtrip();
 
     // Create test account
-    let account = test.account("jdoe@example.com");
+    let account = test.account("robert@example.com");
     let client = account.jmap_client().await;
 
     // Create channels

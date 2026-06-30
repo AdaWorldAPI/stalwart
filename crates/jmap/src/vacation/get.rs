@@ -12,7 +12,10 @@ use jmap_proto::{
     object::vacation_response::{
         VacationResponse, VacationResponseProperty, VacationResponseValue,
     },
-    request::reference::MaybeResultReference,
+    request::{
+        MaybeInvalid,
+        reference::{MaybeIdReference, MaybeResultReference},
+    },
     types::date::UTCDate,
 };
 use jmap_tools::{Map, Value};
@@ -68,14 +71,16 @@ impl VacationResponseGet for Server {
         let do_get = if let Some(MaybeResultReference::Value(ids)) = request.ids {
             let mut do_get = false;
             for id in ids {
-                match id.try_unwrap() {
-                    Some(id) if id.is_singleton() => {
+                match id {
+                    MaybeIdReference::Id(id) if id.is_singleton() => {
                         do_get = true;
                     }
-                    Some(id) => {
-                        response.not_found.push(id);
+                    MaybeIdReference::Id(id) => {
+                        response.push_not_found(id);
                     }
-                    _ => {}
+                    MaybeIdReference::Invalid(s) | MaybeIdReference::Reference(s) => {
+                        response.not_found.push(MaybeInvalid::Invalid(s));
+                    }
                 }
             }
             do_get

@@ -12,6 +12,7 @@ use registry::{
 
 pub async fn test() {
     println!("Running LDAP directory tests...");
+    crate::utils::containers::ensure_openldap().await;
     let mut config = ldap_test_directory();
 
     // Test bind authentication

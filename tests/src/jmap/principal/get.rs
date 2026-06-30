@@ -195,8 +195,45 @@ pub async fn test(test: &TestServer) {
             "urn:ietf:params:jmap:filenode": {
               "maxFileNodeDepth": null,
               "maxSizeFileNodeName": 255,
-              "fileNodeQuerySortOptions": [],
-              "mayCreateTopLevelFileNode": true
+              "forbiddenNameChars": "/<>:\"\\|?*",
+              "forbiddenNodeNames": [
+                ".",
+                "..",
+                "CON",
+                "PRN",
+                "AUX",
+                "NUL",
+                "COM0",
+                "COM1",
+                "COM2",
+                "COM3",
+                "COM4",
+                "COM5",
+                "COM6",
+                "COM7",
+                "COM8",
+                "COM9",
+                "LPT0",
+                "LPT1",
+                "LPT2",
+                "LPT3",
+                "LPT4",
+                "LPT5",
+                "LPT6",
+                "LPT7",
+                "LPT8",
+                "LPT9"
+              ],
+              "fileNodeQuerySortOptions": [
+                "name",
+                "size",
+                "nodeType"
+              ],
+              "mayCreateTopLevelFileNode": true,
+              "caseInsensitiveNames": false,
+              "webTrashUrl": null,
+              "webUrlTemplate": null,
+              "webWriteUrlTemplate": null
             },
             "urn:ietf:params:jmap:mail:share": {},
             "urn:stalwart:jmap": {}

@@ -6,7 +6,7 @@
 
 use crate::{
     cache::calcard::{build_scheduling_resources, path_from_scheduling, resource_from_scheduling},
-    calendar::{Calendar, CalendarEvent, CalendarPreferences},
+    calendar::{CALENDAR_SUBSCRIBED, Calendar, CalendarEvent, CalendarPreferences},
     contact::{AddressBook, AddressBookPreferences, ContactCard},
     file::FileNode,
 };
@@ -349,6 +349,7 @@ impl GroupwareCache for Server {
                     ),
                     ..Default::default()
                 }],
+                subscribers: vec![account_id],
                 ..Default::default()
             }
             .insert(
@@ -390,6 +391,7 @@ impl GroupwareCache for Server {
                             .unwrap_or(name),
                         account_name
                     ),
+                    flags: CALENDAR_SUBSCRIBED,
                     ..Default::default()
                 }],
                 ..Default::default()

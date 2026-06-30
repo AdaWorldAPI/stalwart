@@ -13,7 +13,7 @@ use crate::{
 };
 use common::{config::smtp::resolver::Policy, ipc::PolicyType};
 use mail_auth::{
-    MX,
+    DnssecStatus, MX,
     common::parse::TxtRecordParser,
     mta_sts::{MtaSts, ReportUri, TlsRpt},
     report::tlsrpt::ResultType,
@@ -102,6 +102,7 @@ async fn mta_sts_verify() {
             exchanges: vec!["mx.foobar.org".into()].into_boxed_slice(),
             preference: 10,
         }],
+        DnssecStatus::Secure,
         Instant::now() + Duration::from_secs(10),
     );
     local.server.ipv4_add(

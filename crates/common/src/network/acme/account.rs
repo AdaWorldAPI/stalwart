@@ -7,12 +7,12 @@
 use super::jose::{Body, eab_sign, sign};
 use crate::network::acme::http::{get_header, https};
 use crate::network::acme::{AcmeError, AcmeResult, Directory};
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, EcdsaSigningAlgorithm};
 use base64::Engine;
 use base64::engine::general_purpose::{self, URL_SAFE_NO_PAD};
 use registry::schema::structs::AcmeProvider;
 use reqwest::Method;
-use aws_lc_rs::rand::SystemRandom;
-use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, EcdsaSigningAlgorithm};
 use utils::sanitize_email;
 
 static ALG: &EcdsaSigningAlgorithm = &ECDSA_P256_SHA256_FIXED_SIGNING;

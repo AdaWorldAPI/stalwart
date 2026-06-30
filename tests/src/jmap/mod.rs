@@ -17,6 +17,7 @@ use registry::{
 };
 
 pub mod calendar;
+pub mod compliance;
 pub mod contacts;
 pub mod core;
 pub mod files;
@@ -207,6 +208,8 @@ pub async fn jmap_tests() {
 
     principal::get::test(&test).await;
     principal::availability::test(&test).await;
+
+    compliance::test(&test).await;
 
     if test.is_reset() {
         test.temp_dir.delete();

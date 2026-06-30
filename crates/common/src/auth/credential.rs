@@ -60,8 +60,8 @@ impl AppPassword {
     }
 
     pub fn parse(token: &str) -> Option<Self> {
-        let token = token.strip_prefix("app ")?;
-        let mut reader = Base32Reader::new(token.as_bytes());
+        let token = token.strip_prefix("app")?;
+        let mut reader = Base32Reader::new(token.as_bytes().get(1..)?);
         let mut credential_id = [0u8; 4];
         let mut secret = [0u8; 18];
 
@@ -85,7 +85,7 @@ impl AppPassword {
 
     pub fn build(&self) -> String {
         let mut writer = Base32Writer::with_capacity(std::mem::size_of::<Self>().div_ceil(5) * 8);
-        writer.push_string("app ");
+        writer.push_string("app_");
         let _ = writer.write(&self.credential_id.to_be_bytes());
         let _ = writer.write_all(&self.secret);
         writer.finalize()

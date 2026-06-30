@@ -1,6 +1,6 @@
 [package]
 name = "common"
-version = "0.16.1"
+version = "0.16.12"
 edition = "2024"
 build = "build.rs"
 
@@ -18,9 +18,9 @@ imap_proto = { path = "../imap-proto" }
 sieve-rs = { version = "0.7", features = ["rkyv", "serde"] }
 mail-parser = { version = "0.11", features = ["full_encoding"] } 
 mail-builder = { version = "0.4" }
-mail-auth = { version = "0.8" }
+mail-auth = { version = "0.10", features = ["generate"] }
 smtp-proto = { version = "0.2", features = ["rkyv"] }
-dns-update = { version = "0.2.1" }
+dns-update = { version = "0.5" }
 calcard = { version = "0.3", features = ["rkyv"] }
 ahash = { version = "0.8.2", features = ["serde"] }
 parking_lot = "0.12.1"
@@ -76,7 +76,7 @@ indexmap = "2.7.1"
 tinyvec = { version = "1.10.0", features = ["alloc"] }
 compact_str = { version = "0.9.0", features = ["rkyv", "serde"] }
 lz4_flex = { version = "0.13", features = ["frame"], default-features = false }
-hickory-proto = "0.25"
+hickory-proto = "0.26"
 nohash-hasher = "0.2.0"
 quick_cache = "0.6.9"
 rasn = "0.28"
@@ -85,7 +85,7 @@ rasn-pkix = "0.28"
 sequoia-openpgp = { version = "2.0", default-features = false, features = ["crypto-rust", "allow-experimental-crypto", "allow-variable-time-crypto"] }
 zxcvbn = "3.1.0"
 pkcs8 = { version = "0.10.2", features = ["alloc", "std"] }
-quick-xml = "0.39"
+quick-xml = "0.40"
 
 [target.'cfg(unix)'.dependencies]
 privdrop = "0.5.3"

@@ -22,6 +22,10 @@ impl InMemoryStore {
             structs::InMemoryStore::RedisCluster(redis_cluster_store) => {
                 crate::backend::redis::RedisStore::open_cluster(redis_cluster_store).await
             }
+            #[cfg(feature = "redis")]
+            structs::InMemoryStore::RedisSentinel(redis_sentinel_store) => {
+                crate::backend::redis::RedisStore::open_sentinel(redis_sentinel_store).await
+            }
             // SPDX-SnippetBegin
             // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
             // SPDX-License-Identifier: LicenseRef-SEL

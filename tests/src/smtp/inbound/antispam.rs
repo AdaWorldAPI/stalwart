@@ -21,8 +21,8 @@ use common::{
 use http_proto::{JsonResponse, ToHttpResponse};
 use hyper::Method;
 use mail_auth::{
-    ArcOutput, DkimOutput, DkimResult, DmarcResult, IprevOutput, IprevResult, MX, SpfOutput,
-    SpfResult, dkim::Signature, dmarc::Policy,
+    ArcOutput, DkimOutput, DkimResult, DmarcResult, DnssecStatus, IprevOutput, IprevResult, MX,
+    SpfOutput, SpfResult, dkim::Signature, dmarc::Policy,
 };
 use mail_parser::MessageParser;
 use registry::{
@@ -214,6 +214,7 @@ async fn antispam() {
                 exchanges: vec!["127.0.0.1".into()].into_boxed_slice(),
                 preference: 10,
             }],
+            DnssecStatus::Secure,
             Instant::now() + Duration::from_secs(100),
         );
     }

@@ -6,24 +6,23 @@
 
 // Adapted from rustls-acme (https://github.com/FlorianUekermann/rustls-acme), licensed under MIT/Apache-2.0.
 
-use std::time::Duration;
-
 use super::jose::{
     key_authorization, key_authorization_sha256, key_authorization_sha256_base64, sign,
 };
-use crate::network::acme::http::{get_header, https, parse_retry_after};
+use crate::network::acme::http::{get_header, https, parse_alternate_links, parse_retry_after};
 use crate::network::acme::{
     AcmeError, AcmeResult, Auth, AuthStatus, Challenge, ChallengeType, Directory, Identifier,
     Order, SerializedCert,
 };
+use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, EcdsaSigningAlgorithm};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rcgen::{CustomExtension, KeyPair, PKCS_ECDSA_P256_SHA256};
 use registry::schema::structs::AcmeProvider;
 use reqwest::Method;
-use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, EcdsaSigningAlgorithm};
 use serde::de::DeserializeOwned;
 use serde_json::json;
+use std::time::Duration;
 use store::Serialize;
 use store::write::Archiver;
 
@@ -36,12 +35,14 @@ pub struct AcmeRequestBuilder {
     pub kid: String,
     pub challenge: ChallengeType,
     pub max_retries: u32,
+    pub preferred_chain: Option<String>,
 }
 
 pub struct AcmeResponse<L, B> {
     pub location: L,
     pub body: B,
     pub retry_after: Option<Duration>,
+    pub alternates: Vec<String>,
 }
 
 static ALG: &EcdsaSigningAlgorithm = &ECDSA_P256_SHA256_FIXED_SIGNING;
@@ -66,6 +67,7 @@ impl AcmeRequestBuilder {
             kid: provider.account_uri,
             challenge: provider.challenge_type.into(),
             max_retries: provider.max_retries as u32,
+            preferred_chain: provider.preferred_chain,
         })
     }
 
@@ -86,6 +88,7 @@ impl AcmeRequestBuilder {
         Ok(AcmeResponse {
             location: get_header(&response, "Location").ok(),
             retry_after: parse_retry_after(&response),
+            alternates: parse_alternate_links(&response),
             body: response.text().await?,
         })
     }
@@ -104,6 +107,7 @@ impl AcmeRequestBuilder {
             )))?,
             body: serde_json::from_str(&response.body).map_err(AcmeError::Json)?,
             retry_after: response.retry_after,
+            alternates: response.alternates,
         })
     }
 
@@ -134,8 +138,11 @@ impl AcmeRequestBuilder {
         AcmeResponse::parse(self.request(&url, &payload).await?)
     }
 
-    pub async fn certificate(&self, url: impl AsRef<str>) -> AcmeResult<String> {
-        Ok(self.request(&url, "").await?.body)
+    pub async fn certificate(
+        &self,
+        url: impl AsRef<str>,
+    ) -> AcmeResult<AcmeResponse<Option<String>, String>> {
+        self.request(&url, "").await
     }
 
     pub fn http_proof(&self, challenge: &Challenge) -> AcmeResult<Vec<u8>> {
@@ -161,9 +168,8 @@ impl AcmeRequestBuilder {
         })?;
         let key_auth = key_authorization_sha256(&self.key_pair, challenge_token)?;
         params.custom_extensions = vec![CustomExtension::new_acme_identifier(key_auth.as_ref())];
-        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).map_err(|err| {
-            AcmeError::Crypto(format!("Failed to generate key pair: {}", err))
-        })?;
+        let key_pair = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+            .map_err(|err| AcmeError::Crypto(format!("Failed to generate key pair: {}", err)))?;
         let cert = params.self_signed(&key_pair).map_err(|err| {
             AcmeError::Crypto(format!(
                 "Failed to generate TLS-ALPN-01 certificate: {}",
@@ -213,6 +219,7 @@ impl<L, T: DeserializeOwned> AcmeResponse<L, T> {
                 location: input.location,
                 body,
                 retry_after: input.retry_after,
+                alternates: input.alternates,
             })
     }
 }

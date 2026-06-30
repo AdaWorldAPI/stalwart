@@ -19,7 +19,10 @@ use types::TimeRange;
 pub async fn test(test: &TestServer) {
     println!("Running REPORT calendar-query & free-busy-query tests...");
     let client = test.account("john@example.com").webdav_client();
-    let cal_path = format!("{}/john%40example.com/default/", DavResourceName::Cal.base_path());
+    let cal_path = format!(
+        "{}/john%40example.com/default/",
+        DavResourceName::Cal.base_path()
+    );
 
     #[allow(clippy::never_loop)]
     for (num, ics) in [

@@ -169,6 +169,7 @@ impl BlobUpload for Server {
                     .blob_has_quota(account_id, data.len())
                     .await
                     .caused_by(trc::location!())?
+                    .allowed
             {
                 response.not_created.append(
                     create_id,
@@ -216,24 +217,26 @@ impl BlobUpload for Server {
         }
 
         // Enforce quota
-        if !access_token.has_permission(Permission::UnlimitedUploads)
-            && !self
+        if !access_token.has_permission(Permission::UnlimitedUploads) {
+            let status = self
                 .blob_has_quota(account_id.document_id(), data.len())
                 .await
-                .caused_by(trc::location!())?
-        {
-            let err = Err(trc::LimitEvent::BlobQuota
-                .into_err()
-                .ctx(trc::Key::Size, self.core.jmap.upload_tmp_quota_size)
-                .ctx(trc::Key::Total, self.core.jmap.upload_tmp_quota_amount));
+                .caused_by(trc::location!())?;
+            if !status.allowed {
+                let err = Err(trc::LimitEvent::BlobQuota
+                    .into_err()
+                    .ctx(trc::Key::Size, self.core.jmap.upload_tmp_quota_size)
+                    .ctx(trc::Key::Total, self.core.jmap.upload_tmp_quota_amount)
+                    .ctx(trc::Key::Expires, status.expires_in));
 
-            #[cfg(feature = "test_mode")]
-            if !DISABLE_UPLOAD_QUOTA.load(std::sync::atomic::Ordering::Relaxed) {
+                #[cfg(feature = "test_mode")]
+                if !DISABLE_UPLOAD_QUOTA.load(std::sync::atomic::Ordering::Relaxed) {
+                    return err;
+                }
+
+                #[cfg(not(feature = "test_mode"))]
                 return err;
             }
-
-            #[cfg(not(feature = "test_mode"))]
-            return err;
         }
 
         Ok(UploadResponse {

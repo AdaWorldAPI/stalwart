@@ -40,15 +40,21 @@ pub async fn cluster_tests() {
         "COORDINATOR=<coordinator_type> cargo test`"
     ));
     let coordinator = match coordinator_id.as_str() {
-        "Nats" => Coordinator::Nats(NatsCoordinator {
-            addresses: Map::new(vec!["127.0.0.1:4222".to_string()]),
-            use_tls: false,
-            ..Default::default()
-        }),
-        "Redis" => Coordinator::Redis(RedisStore {
-            url: "redis://127.0.0.1".to_string(),
-            ..Default::default()
-        }),
+        "Nats" => {
+            crate::utils::containers::ensure_nats().await;
+            Coordinator::Nats(NatsCoordinator {
+                addresses: Map::new(vec!["127.0.0.1:4222".to_string()]),
+                use_tls: false,
+                ..Default::default()
+            })
+        }
+        "Redis" => {
+            crate::utils::containers::ensure_redis().await;
+            Coordinator::Redis(RedisStore {
+                url: "redis://127.0.0.1".to_string(),
+                ..Default::default()
+            })
+        }
         _ => panic!("Unsupported coordinator type: {}", coordinator_id),
     };
 

@@ -16,7 +16,7 @@ use jmap_proto::{
     error::set::SetError,
     method::set::{SetRequest, SetResponse},
     object::contact,
-    request::IntoValid,
+    request::MaybeInvalid,
     types::state::State,
 };
 use jmap_tools::{JsonPointerHandler, JsonPointerItem, Key, Value};
@@ -30,7 +30,7 @@ use trc::AddContext;
 use types::{
     acl::Acl,
     blob::BlobId,
-    collection::{Collection, SyncCollection},
+    collection::{Collection, SyncCollection, VanishedCollection},
     id::Id,
 };
 
@@ -73,7 +73,7 @@ impl ContactCardSet for Server {
             )
             .await?;
         let mut response = SetResponse::from_request(&request, self.core.jmap.set_max_objects)?;
-        let will_destroy = request.unwrap_destroy().into_valid().collect::<Vec<_>>();
+        let will_destroy = response.collect_will_destroy(request.unwrap_destroy());
 
         // Obtain addressBookIds
         let (can_add_address_books, can_delete_address_books, can_modify_address_books) =
@@ -120,7 +120,14 @@ impl ContactCardSet for Server {
         }
 
         // Process updates
-        'update: for (id, object) in request.unwrap_update().into_valid() {
+        'update: for (id, object) in request.unwrap_update() {
+            let id = match id {
+                MaybeInvalid::Value(id) => id,
+                invalid => {
+                    response.not_updated.append(invalid, SetError::not_found());
+                    continue 'update;
+                }
+            };
             // Make sure id won't be destroyed
             if will_destroy.contains(&id) {
                 response.not_updated.append(id, SetError::will_destroy());
@@ -152,9 +159,12 @@ impl ContactCardSet for Server {
             let mut js_contact = new_contact_card.card.into_jscontact();
 
             // Process changes
-            if let Err(err) =
-                update_contact_card(object, &mut new_contact_card.names, &mut js_contact)
-            {
+            if let Err(err) = update_contact_card(
+                Some(id),
+                object,
+                &mut new_contact_card.names,
+                &mut js_contact,
+            ) {
                 response.not_updated.append(id, err);
                 continue 'update;
             }
@@ -339,6 +349,10 @@ impl ContactCardSet for Server {
                 )
                 .caused_by(trc::location!())?;
 
+            for path in cache.format_resource_paths_by_id(document_id) {
+                batch.log_vanished_item(VanishedCollection::AddressBook, path);
+            }
+
             response.destroyed.push(id);
         }
 
@@ -371,7 +385,7 @@ impl ContactCardSet for Server {
     ) -> trc::Result<Result<u32, SetError<JSContactProperty<Id>>>> {
         // Process changes
         let mut names = Vec::new();
-        if let Err(err) = update_contact_card(updates, &mut names, &mut js_contact) {
+        if let Err(err) = update_contact_card(None, updates, &mut names, &mut js_contact) {
             return Ok(Err(err));
         }
 
@@ -448,6 +462,7 @@ impl ContactCardSet for Server {
 }
 
 fn update_contact_card<'x>(
+    expected_id: Option<Id>,
     updates: Value<'x, JSContactProperty<Id>, JSContactValue<Id, BlobId>>,
     addressbooks: &mut Vec<DavName>,
     js_contact: &mut JSContact<'x, Id, BlobId>,
@@ -494,6 +509,13 @@ fn update_contact_card<'x>(
                     }
                 }
                 entries.insert(JSContactProperty::Media, Value::Object(media));
+            }
+            (JSContactProperty::Id, value) => {
+                if !expected_id.is_some_and(|expected| crate::matches_id(&value, expected)) {
+                    return Err(SetError::invalid_properties()
+                        .with_property(JSContactProperty::Id)
+                        .with_description("The id property is immutable."));
+                }
             }
             (property, value) => {
                 entries.insert(property, value);

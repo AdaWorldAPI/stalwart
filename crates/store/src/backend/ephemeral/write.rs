@@ -163,7 +163,10 @@ impl EphemeralStore {
         let to_key = to.serialize(0);
         let mut state = self.state.write();
         if let Some(map) = state.subspaces.get_mut(&subspace) {
-            let keys: Vec<Vec<u8>> = map.range(from_key..to_key).map(|(k, _)| k.clone()).collect();
+            let keys: Vec<Vec<u8>> = map
+                .range(from_key..to_key)
+                .map(|(k, _)| k.clone())
+                .collect();
             for k in keys {
                 map.remove(&k);
             }

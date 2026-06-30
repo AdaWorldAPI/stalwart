@@ -213,7 +213,7 @@ impl CalendarEventGet for Server {
             // Obtain the calendar_event object
             let document_id = id.document_id();
             if !calendar_event_ids.contains(document_id) {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             }
 
@@ -226,7 +226,7 @@ impl CalendarEventGet for Server {
                 ))
                 .await?
             else {
-                response.not_found.push(id);
+                response.push_not_found(id);
                 continue;
             };
             let mut calendar_event = _calendar_event
@@ -290,7 +290,7 @@ impl CalendarEventGet for Server {
                 {
                     for expansion in expansions {
                         if !expansion.is_valid() {
-                            response.not_found.push(<Id as CalendarSyntheticId>::new(
+                            response.push_not_found(<Id as CalendarSyntheticId>::new(
                                 expansion.expansion_id,
                                 document_id,
                             ));
@@ -411,11 +411,12 @@ impl CalendarEventGet for Server {
                         ));
                     }
                 } else {
-                    response
-                        .not_found
-                        .extend(expansion_ids.into_iter().map(|expansion_id| {
-                            <Id as CalendarSyntheticId>::new(expansion_id, document_id)
-                        }));
+                    for expansion_id in expansion_ids {
+                        response.push_not_found(<Id as CalendarSyntheticId>::new(
+                            expansion_id,
+                            document_id,
+                        ));
+                    }
                     continue;
                 }
             }

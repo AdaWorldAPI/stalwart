@@ -81,7 +81,6 @@ pub(crate) async fn queued_message_set(
         }
 
         // Process patches
-        let prev_event = archived_message.inner.next_delivery_event(None);
         let mut message = map_message(archived_message.inner);
         message.next_retry = None;
         for (key, value) in value.into_expanded_object() {
@@ -101,7 +100,9 @@ pub(crate) async fn queued_message_set(
 
         // Process changes
         let mut has_changes = false;
+        let mut modified_rcpts = AHashSet::new();
         let mut queued_message = archived_message.deserialize()?;
+        let prev_events = queued_message.next_events();
         if queued_message.env_id.as_deref() != message.env_id.as_deref() {
             queued_message.env_id = message.env_id.as_deref().map(|v| v.into());
             has_changes = true;
@@ -110,7 +111,7 @@ pub(crate) async fn queued_message_set(
             queued_message.priority = message.priority as i16;
             has_changes = true;
         }
-        for rcpt in queued_message.recipients.iter_mut() {
+        for (idx, rcpt) in queued_message.recipients.iter_mut().enumerate() {
             if !message
                 .recipients
                 .iter()
@@ -121,19 +122,27 @@ pub(crate) async fn queued_message_set(
                     details: queue::Error::Io("Delivery canceled.".into()),
                 });
                 has_changes = true;
+                modified_rcpts.insert(idx);
             }
         }
         for (address, rcpt) in message.recipients.into_iter() {
-            let Some(queued_rcpt) = queued_message
+            let Some((idx, queued_rcpt)) = queued_message
                 .recipients
                 .iter_mut()
-                .find(|r| r.address.as_ref() == address.as_str())
+                .enumerate()
+                .find(|(_, r)| r.address.as_ref() == address.as_str())
             else {
-                continue;
+                set.response.not_updated.append(
+                    id,
+                    SetError::invalid_properties()
+                        .with_description(format!("Recipient '{address}' does not exist")),
+                );
+                continue 'outer;
             };
+            let mut changed = false;
             if rcpt.orcpt.as_deref() != queued_rcpt.orcpt.as_deref() {
                 queued_rcpt.orcpt = rcpt.orcpt.as_deref().map(|v| v.into());
-                has_changes = true;
+                changed = true;
             }
             let expiry = match rcpt.expires {
                 QueueExpiry::Ttl(ttl) => common::config::smtp::queue::QueueExpiry::Ttl(
@@ -147,7 +156,7 @@ pub(crate) async fn queued_message_set(
             };
             if expiry != queued_rcpt.expires {
                 queued_rcpt.expires = expiry;
-                has_changes = true;
+                changed = true;
             }
 
             for (due, count, field) in [
@@ -160,22 +169,30 @@ pub(crate) async fn queued_message_set(
                 };
                 if schedule != *field {
                     *field = schedule;
-                    has_changes = true;
+                    changed = true;
                 }
             }
 
             if let Some(next_retry) = set_next_retry
                 && !matches!(queued_rcpt.status, Status::PermanentFailure(_))
             {
-                queued_rcpt.retry.due = next_retry.timestamp() as u64;
-                has_changes = true;
+                let new_due = next_retry.timestamp() as u64;
+                if queued_rcpt.retry.due != new_due {
+                    queued_rcpt.retry.due = new_due;
+                    changed = true;
+                }
             }
 
             if matches!(rcpt.status, RecipientStatus::Scheduled)
                 && !matches!(queued_rcpt.status, Status::Scheduled)
             {
                 queued_rcpt.status = Status::Scheduled;
+                changed = true;
+            }
+
+            if changed {
                 has_changes = true;
+                modified_rcpts.insert(idx);
             }
         }
 
@@ -188,9 +205,11 @@ pub(crate) async fn queued_message_set(
                     Status::TemporaryFailure(_) | Status::Scheduled
                 )
             }) {
-                message.save_changes(set.server, prev_event).await
+                message
+                    .save_registry_changes(set.server, prev_events, modified_rcpts)
+                    .await
             } else {
-                message.remove(set.server, prev_event).await
+                message.remove_registry(set.server, prev_events).await
             };
 
             if !is_success {
@@ -472,9 +491,18 @@ pub(crate) async fn queued_message_query(
 
         let mut total = 0;
         if let Some(anchor) = req.request.anchor {
-            let anchor = anchor.id();
-            if anchor > due_from {
-                due_from = anchor;
+            let anchor_id = anchor.id();
+            if let Some(archive) = req.server.read_message_archive(anchor_id).await?
+                && let Ok(archived) = archive.unarchive::<Message>()
+                && let Some(anchor_due) = archived.next_delivery_event(queue_name)
+                && anchor_due >= due_from
+                && anchor_due <= due_to
+            {
+                if params.sort_ascending {
+                    due_from = anchor_due;
+                } else {
+                    due_to = anchor_due;
+                }
             }
         }
 

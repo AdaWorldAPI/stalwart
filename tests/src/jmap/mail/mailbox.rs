@@ -222,7 +222,7 @@ pub async fn test(test: &TestServer) {
         matches!(
             result,
             Err(Error::Set(SetError {
-                type_: SetErrorType::InvalidProperties,
+                type_: SetErrorType::AlreadyExists,
                 ..
             }))
         ),

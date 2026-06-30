@@ -8,6 +8,7 @@ use crate::{
     Server,
     auth::{
         ACCOUNT_FLAG_ENCRYPT_ALGO_AES128, ACCOUNT_FLAG_ENCRYPT_ALGO_AES256,
+        ACCOUNT_FLAG_ENCRYPT_ALGO_AES256_GCM, ACCOUNT_FLAG_ENCRYPT_ALGO_CHACHA20_POLY1305,
         ACCOUNT_FLAG_ENCRYPT_APPEND, ACCOUNT_FLAG_ENCRYPT_METHOD_PGP,
         ACCOUNT_FLAG_ENCRYPT_METHOD_SMIME, ACCOUNT_FLAG_ENCRYPT_TRAIN_SPAM_FILTER, ACCOUNT_IS_USER,
         AccountCache, AccountInfo, AccountTenantIds, DOMAIN_FLAG_RELAY, DOMAIN_FLAG_SUB_ADDRESSING,
@@ -41,9 +42,14 @@ use store::{
 };
 use trc::{AddContext, StoreEvent};
 use types::id::Id;
+use utils::DomainPart;
 
 impl Server {
     pub async fn domain(&self, domain: &str) -> trc::Result<Option<Arc<DomainCache>>> {
+        let Some(domain) = domain.to_ascii_domain() else {
+            return Ok(None);
+        };
+        let domain = domain.as_ref();
         let domain_names = &self.inner.cache.domain_names;
 
         if let Some(domain_id) = domain_names.get(domain) {
@@ -230,8 +236,35 @@ impl Server {
                 {
                     let item_id = object.id().document_id();
                     let result = match object.object() {
-                        ObjectType::Account => EmailCache::Account(item_id),
-                        ObjectType::MailingList => EmailCache::MailingList(item_id),
+                        ObjectType::Account => {
+                            if self
+                                .account(item_id)
+                                .await
+                                .caused_by(trc::location!())?
+                                .addresses
+                                .iter()
+                                .any(|address| {
+                                    address.domain_id == domain_id
+                                        && address.local_part.as_ref() == local_part
+                                })
+                            {
+                                EmailCache::Account(item_id)
+                            } else {
+                                EmailCache::DisabledAccountAddress(item_id)
+                            }
+                        }
+                        ObjectType::MailingList => {
+                            if let Some(list) = self.try_list(item_id).await?
+                                && !list.addresses.iter().any(|address| {
+                                    address.domain_id == domain_id
+                                        && address.local_part.as_ref() == local_part
+                                })
+                            {
+                                EmailCache::DisabledListAddress(item_id)
+                            } else {
+                                EmailCache::MailingList(item_id)
+                            }
+                        }
                         _ => {
                             return Err(trc::AuthEvent::Error
                                 .into_err()
@@ -380,6 +413,14 @@ impl Server {
                                 flags |= ACCOUNT_FLAG_ENCRYPT_ALGO_AES128;
                                 settings.into()
                             }
+                            EncryptionAtRest::Aes256Gcm(settings) => {
+                                flags |= ACCOUNT_FLAG_ENCRYPT_ALGO_AES256_GCM;
+                                settings.into()
+                            }
+                            EncryptionAtRest::ChaCha20Poly1305(settings) => {
+                                flags |= ACCOUNT_FLAG_ENCRYPT_ALGO_CHACHA20_POLY1305;
+                                settings.into()
+                            }
                         };
                         let encryption_key = if let Some(settings) = encryption_settings {
                             if settings.allow_spam_training {
@@ -422,10 +463,16 @@ impl Server {
                                 domain_id: account.domain_id.document_id(),
                             }]
                             .into_iter()
-                            .chain(account.aliases.into_iter().map(|alias| EmailAddress {
-                                local_part: alias.name.into(),
-                                domain_id: alias.domain_id.document_id(),
-                            }))
+                            .chain(
+                                account
+                                    .aliases
+                                    .into_iter()
+                                    .filter(|alias| alias.enabled)
+                                    .map(|alias| EmailAddress {
+                                        local_part: alias.name.into(),
+                                        domain_id: alias.domain_id.document_id(),
+                                    }),
+                            )
                             .collect(),
                             id_tenant: account.member_tenant_id.map(|id| id.document_id()),
                             id_member_of: account
@@ -479,10 +526,16 @@ impl Server {
                                 domain_id: account.domain_id.document_id(),
                             }]
                             .into_iter()
-                            .chain(account.aliases.into_iter().map(|alias| EmailAddress {
-                                local_part: alias.name.into(),
-                                domain_id: alias.domain_id.document_id(),
-                            }))
+                            .chain(
+                                account
+                                    .aliases
+                                    .into_iter()
+                                    .filter(|alias| alias.enabled)
+                                    .map(|alias| EmailAddress {
+                                        local_part: alias.name.into(),
+                                        domain_id: alias.domain_id.document_id(),
+                                    }),
+                            )
                             .collect(),
                             id_tenant: account.member_tenant_id.map(|id| id.document_id()),
                             id_member_of: Default::default(),
@@ -764,9 +817,22 @@ impl Server {
                 let Some(list) = self.registry().object::<MailingList>(id.into()).await? else {
                     return Ok(None);
                 };
-                let cache = Arc::new(MailingListCache {
-                    recipients: list.recipients.into_iter().map(Into::into).collect(),
-                });
+                let cache =
+                    Arc::new(MailingListCache {
+                        addresses: [EmailAddress {
+                            local_part: list.name.into(),
+                            domain_id: list.domain_id.document_id(),
+                        }]
+                        .into_iter()
+                        .chain(list.aliases.into_iter().filter(|alias| alias.enabled).map(
+                            |alias| EmailAddress {
+                                local_part: alias.name.into(),
+                                domain_id: alias.domain_id.document_id(),
+                            },
+                        ))
+                        .collect(),
+                        recipients: list.recipients.into_iter().map(Into::into).collect(),
+                    });
                 let _ = guard.insert(cache.clone());
                 Ok(Some(cache))
             }

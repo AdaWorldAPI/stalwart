@@ -5,7 +5,7 @@
  */
 
 use crate::{
-    config::{build_ecdsa_pem, build_rsa_keypair},
+    config::{EcKeyCurve, build_ecdsa_pem, build_rsa_keypair},
     manager::application::Resource,
 };
 use biscuit::{
@@ -170,31 +170,6 @@ impl OAuthConfig {
     }
 }
 
-impl Default for OAuthConfig {
-    fn default() -> Self {
-        Self {
-            oauth_key: Default::default(),
-            oauth_expiry_user_code: Default::default(),
-            oauth_expiry_auth_code: Default::default(),
-            oauth_expiry_token: Default::default(),
-            oauth_expiry_refresh_token: Default::default(),
-            oauth_expiry_refresh_token_renew: Default::default(),
-            oauth_max_auth_attempts: Default::default(),
-            oidc_expiry_id_token: Default::default(),
-            allow_anonymous_client_registration: Default::default(),
-            require_client_authentication: Default::default(),
-            oidc_signing_secret: Secret::Bytes("secret".to_string().into_bytes()),
-            oidc_signature_algorithm: SignatureAlgorithm::HS256,
-            oidc_jwks: Resource {
-                content_type: "application/json".into(),
-                contents: serde_json::to_string(&JWKSet::<()> { keys: vec![] })
-                    .unwrap_or_default()
-                    .into_bytes(),
-            },
-        }
-    }
-}
-
 async fn parse_rsa_key(auth: &OidcProvider) -> Result<(Secret, AlgorithmParameters), String> {
     let rsa_key_pair = build_rsa_keypair(auth.signature_key.secret().await?.as_ref())?;
 
@@ -222,19 +197,22 @@ async fn parse_ecdsa_key(
     auth: &OidcProvider,
     oidc_signature_algorithm: SignatureAlgorithm,
 ) -> Result<(Secret, AlgorithmParameters), String> {
-    let (alg, curve) = match oidc_signature_algorithm {
+    let (alg, curve, ec_curve) = match oidc_signature_algorithm {
         SignatureAlgorithm::ES256 => (
             &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
             EllipticCurve::P256,
+            EcKeyCurve::P256,
         ),
         SignatureAlgorithm::ES384 => (
             &signature::ECDSA_P384_SHA384_FIXED_SIGNING,
             EllipticCurve::P384,
+            EcKeyCurve::P384,
         ),
         _ => unreachable!(),
     };
 
-    let ecdsa_key_pair = build_ecdsa_pem(alg, auth.signature_key.secret().await?.as_ref())?;
+    let ecdsa_key_pair =
+        build_ecdsa_pem(alg, ec_curve, auth.signature_key.secret().await?.as_ref())?;
     let ecdsa_public_key = ecdsa_key_pair.public_key().as_ref();
 
     let (x, y) = match oidc_signature_algorithm {

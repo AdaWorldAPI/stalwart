@@ -14,7 +14,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose};
 use directory::{
-    Credentials, Directory,
+    Credentials, Directory, Recipient,
     core::secret::{SecretVerificationResult, verify_mfa_secret_hash, verify_secret_hash},
 };
 use registry::schema::{
@@ -142,6 +142,13 @@ impl Server {
 
                 // Authenticate app passwords
                 if let Some(app_pass) = AppPassword::parse(secret) {
+                    if username.is_master() {
+                        return Err(trc::AuthEvent::Failed
+                            .into_err()
+                            .ctx(trc::Key::AccountName, auth_as_address.to_string())
+                            .ctx(trc::Key::SpanId, req.session_id)
+                            .reason("App passwords cannot be used for impersonation"));
+                    }
                     return if let Some(account_id) =
                         self.account_id_from_parts(auth_as_local, domain.id).await?
                     {
@@ -164,7 +171,17 @@ impl Server {
                 // Obtain external directory, if any
                 let mut is_alias_login = false;
                 let token = if let Some(directory) = self.get_directory_for_cached_domain(&domain) {
-                    let directory_account = directory.authenticate(&req.credentials).await?;
+                    let directory_account = if username.is_master() {
+                        directory
+                            .authenticate(&Credentials::Basic {
+                                username: auth_as_address.to_string(),
+                                secret: secret.clone(),
+                                mfa_token: mfa_token.clone(),
+                            })
+                            .await?
+                    } else {
+                        directory.authenticate(&req.credentials).await?
+                    };
 
                     is_alias_login = directory_account.email != auth_as_address;
                     self.build_directory_token(directory_account, req.remote_ip)
@@ -247,8 +264,19 @@ impl Server {
                         Permission::Authenticate,
                     ])?;
                     let address = username.account().address();
-                    let master_address = username.account().address();
-                    if let Some(account_id) = self.account_id_from_email(address, false).await? {
+                    let master_address = auth_as_address;
+                    let mut account_id = self.account_id_from_email(address, false).await?;
+                    if account_id.is_none()
+                        && let Some(impersonated_domain) = username.account().domain()
+                        && let Some(impersonated_domain_cache) =
+                            self.domain(impersonated_domain).await?
+                        && let Some(directory) =
+                            self.get_directory_for_cached_domain(&impersonated_domain_cache)
+                        && let Recipient::Account(account) = directory.recipient(address).await?
+                    {
+                        account_id = Some(Box::pin(self.synchronize_account(account)).await?.id);
+                    }
+                    if let Some(account_id) = account_id {
                         trc::event!(
                             Auth(trc::AuthEvent::Success),
                             AccountName = address.to_string(),
@@ -314,6 +342,9 @@ impl Server {
                 } else {
                     self.get_default_directory()
                 };
+
+                // Try external directory authentication first if supported, then fallback to internal OAuth.
+                let mut external_error = None;
                 if let Some(directory) = directory
                     && directory.has_bearer_token_support()
                 {
@@ -322,20 +353,28 @@ impl Server {
                             return self.build_directory_token(result, req.remote_ip).await;
                         }
                         Err(err) => {
-                            if !err.matches(trc::EventType::Auth(trc::AuthEvent::Failed)) {
-                                return Err(err);
-                            }
+                            external_error = Some(err);
                         }
                     }
                 }
 
                 // Internal OAuth
-                let token_info = self
+                match self
                     .validate_access_token(GrantType::AccessToken.into(), token)
-                    .await?;
-                self.access_token(token_info.account_id)
                     .await
-                    .and_then(|token| AccessToken::new(token, req.remote_ip))
+                {
+                    Ok(token_info) => self
+                        .access_token(token_info.account_id)
+                        .await
+                        .and_then(|token| AccessToken::new(token, req.remote_ip)),
+                    Err(err) => {
+                        if let Some(external_error) = external_error {
+                            Err(external_error)
+                        } else {
+                            Err(err)
+                        }
+                    }
+                }
             }
         }
     }
@@ -458,7 +497,7 @@ impl Server {
         account: directory::Account,
         remote_ip: IpAddr,
     ) -> trc::Result<AccessToken> {
-        let account = self.synchronize_account(account).await?;
+        let account = Box::pin(self.synchronize_account(account)).await?;
         self.access_token_from_account(account.id, account.account)
             .await
             .and_then(|token| AccessToken::new(token, remote_ip))
@@ -477,7 +516,8 @@ impl Server {
                 .domain(domain_name)
                 .await
                 .caused_by(trc::location!())?
-                .and_then(|domain| self.core.storage.directories.get(&domain.id))
+                .and_then(|domain| domain.id_directory)
+                .and_then(|id_directory| self.core.storage.directories.get(&id_directory))
                 .or_else(|| self.get_default_directory()));
         }
         // SPDX-SnippetEnd

@@ -16,6 +16,40 @@ use types::id::Id;
 
 pub struct JmapResponse(pub Value);
 
+pub struct RawResponse {
+    pub status: u16,
+    pub headers: reqwest::header::HeaderMap,
+    pub body: Vec<u8>,
+}
+
+impl RawResponse {
+    async fn from_response(response: reqwest::Response) -> Self {
+        RawResponse {
+            status: response.status().as_u16(),
+            headers: response.headers().clone(),
+            body: response.bytes().await.unwrap().to_vec(),
+        }
+    }
+
+    pub fn json(&self) -> Option<Value> {
+        serde_json::from_slice(&self.body).ok()
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).to_string()
+    }
+
+    pub fn is_client_error(&self) -> bool {
+        (400..500).contains(&self.status)
+    }
+
+    pub fn content_type(&self) -> Option<&str> {
+        self.headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ChangeType<'x> {
     Created(&'x str),
@@ -44,16 +78,22 @@ impl Account {
             .into_iter()
             .map(|id| Value::String(id.to_string()))
             .collect::<Vec<Value>>();
+        let properties = properties
+            .into_iter()
+            .map(|p| Value::String(p.to_string()))
+            .collect::<Vec<_>>();
+        let properties = if properties.is_empty() {
+            Value::Null
+        } else {
+            Value::Array(properties)
+        };
 
         if account.id().document_id() != u32::MAX {
             self.jmap_method_calls(json!([[
                 format!("{object}/get"),
                 {
                     "accountId": account.id_string(),
-                    "properties": properties
-                    .into_iter()
-                    .map(|p| Value::String(p.to_string()))
-                    .collect::<Vec<_>>(),
+                    "properties": properties,
                     "ids": if !ids.is_empty() { Some(ids) } else { None }
                 },
                 "0"
@@ -63,10 +103,7 @@ impl Account {
             self.jmap_method_calls(json!([[
                 format!("{object}/get"),
                 {
-                    "properties": properties
-                    .into_iter()
-                    .map(|p| Value::String(p.to_string()))
-                    .collect::<Vec<_>>(),
+                    "properties": properties,
                     "ids": if !ids.is_empty() { Some(ids) } else { None }
                 },
                 "0"
@@ -95,6 +132,7 @@ impl Account {
             })
             .collect::<Vec<Value>>();
         let arguments = [
+            ("accountId".to_string(), self.id_string().into()),
             ("filter".to_string(), Value::Object(filter)),
             ("sort".to_string(), Value::Array(sort_by)),
         ]
@@ -258,6 +296,7 @@ impl Account {
         self.jmap_method_calls(json!([[
             format!("{object}/changes"),
             {
+                "accountId": self.id_string(),
                 "sinceState": state.to_string()
             },
             "0"
@@ -270,20 +309,107 @@ impl Account {
             .await
     }
 
+    pub fn basic_auth(&self) -> String {
+        format!(
+            "Basic {}",
+            general_purpose::STANDARD.encode(format!("{}:{}", self.name(), self.secret()))
+        )
+    }
+
+    pub fn base_url(&self) -> String {
+        format!("https://127.0.0.1:{}", self.http_listener_port)
+    }
+
+    pub fn api_url(&self) -> String {
+        format!("{}/jmap", self.base_url())
+    }
+
+    fn http_client(&self, timeout_ms: u64) -> reqwest::Client {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .unwrap()
+    }
+
+    pub async fn http_get_raw(&self, url: &str, accept: Option<&str>) -> RawResponse {
+        let mut req = self
+            .http_client(5000)
+            .get(url)
+            .header(header::AUTHORIZATION, self.basic_auth());
+        if let Some(accept) = accept {
+            req = req.header(header::ACCEPT, accept);
+        }
+        RawResponse::from_response(req.send().await.unwrap()).await
+    }
+
+    pub async fn http_post_raw(
+        &self,
+        url: &str,
+        content_type: &str,
+        body: impl Into<Vec<u8>>,
+    ) -> RawResponse {
+        RawResponse::from_response(
+            self.http_client(5000)
+                .post(url)
+                .header(header::AUTHORIZATION, self.basic_auth())
+                .header(header::CONTENT_TYPE, content_type)
+                .body(body.into())
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await
+    }
+
+    pub async fn jmap_raw_post(&self, body: impl Into<Vec<u8>>, content_type: &str) -> RawResponse {
+        let url = self.api_url();
+        self.http_post_raw(&url, content_type, body).await
+    }
+
+    pub async fn jmap_request(&self, using: &[&str], calls: Value) -> JmapResponse {
+        let body = json!({
+            "using": using,
+            "methodCalls": calls
+        });
+        let raw = self
+            .jmap_raw_post(body.to_string(), "application/json")
+            .await;
+        JmapResponse(
+            raw.json()
+                .unwrap_or_else(|| panic!("Response was not valid JSON: {}", raw.text())),
+        )
+    }
+
     pub async fn jmap_method_calls(&self, calls: Value) -> JmapResponse {
         let mut headers = header::HeaderMap::new();
 
         headers.insert(
             header::AUTHORIZATION,
-            header::HeaderValue::from_str(&format!(
-                "Basic {}",
-                general_purpose::STANDARD.encode(format!("{}:{}", self.name(), self.secret()))
-            ))
-            .unwrap(),
+            header::HeaderValue::from_str(&self.basic_auth()).unwrap(),
         );
 
         let body = json!({
-          "using": [ "urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail", "urn:ietf:params:jmap:quota" ],
+          "using": [
+            "urn:ietf:params:jmap:core",
+            "urn:ietf:params:jmap:mail",
+            "urn:ietf:params:jmap:submission",
+            "urn:ietf:params:jmap:vacationresponse",
+            "urn:ietf:params:jmap:contacts",
+            "urn:ietf:params:jmap:contacts:parse",
+            "urn:ietf:params:jmap:calendars",
+            "urn:ietf:params:jmap:calendars:parse",
+            "urn:ietf:params:jmap:websocket",
+            "urn:ietf:params:jmap:sieve",
+            "urn:ietf:params:jmap:blob",
+            "urn:ietf:params:jmap:quota",
+            "urn:ietf:params:jmap:principals",
+            "urn:ietf:params:jmap:principals:owner",
+            "urn:ietf:params:jmap:principals:availability",
+            "urn:ietf:params:jmap:filenode",
+            "urn:ietf:params:jmap:mail:share",
+            "urn:stalwart:jmap"
+          ],
           "methodCalls": calls
         });
 
@@ -350,6 +476,7 @@ impl Account {
         self.jmap_method_calls(json!([[
             "AddressBook/get",
             {
+              "accountId": self.id_string(),
               "ids" : (),
               "properties" : [
                 "id"
@@ -360,6 +487,7 @@ impl Account {
           [
             "AddressBook/set",
             {
+              "accountId": self.id_string(),
               "#destroy" : {
                     "resultOf": "R1",
                     "name": "AddressBook/get",
@@ -377,6 +505,7 @@ impl Account {
         self.jmap_method_calls(json!([[
             "Calendar/get",
             {
+              "accountId": self.id_string(),
               "ids" : (),
               "properties" : [
                 "id"
@@ -387,6 +516,7 @@ impl Account {
           [
             "Calendar/set",
             {
+              "accountId": self.id_string(),
               "#destroy" : {
                     "resultOf": "R1",
                     "name": "Calendar/get",
@@ -404,6 +534,7 @@ impl Account {
         self.jmap_method_calls(json!([[
             "CalendarEventNotification/get",
             {
+              "accountId": self.id_string(),
               "ids" : (),
               "properties" : [
                 "id"
@@ -414,6 +545,7 @@ impl Account {
           [
             "CalendarEventNotification/set",
             {
+              "accountId": self.id_string(),
               "#destroy" : {
                     "resultOf": "R1",
                     "name": "CalendarEventNotification/get",
@@ -472,6 +604,51 @@ impl JmapResponse {
         self.0
             .pointer("/methodResponses/0/1")
             .unwrap_or_else(|| panic!("Missing method response in response: {self:?}"))
+    }
+
+    pub fn num_responses(&self) -> usize {
+        self.0
+            .pointer("/methodResponses")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
+    }
+
+    pub fn name_at(&self, n: usize) -> &str {
+        self.0
+            .pointer(&format!("/methodResponses/{n}/0"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("Missing method name at {n}: {self:?}"))
+    }
+
+    pub fn response_at(&self, n: usize) -> &Value {
+        self.0
+            .pointer(&format!("/methodResponses/{n}/1"))
+            .unwrap_or_else(|| panic!("Missing method response at {n}: {self:?}"))
+    }
+
+    pub fn call_id_at(&self, n: usize) -> &str {
+        self.0
+            .pointer(&format!("/methodResponses/{n}/2"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("Missing call id at {n}: {self:?}"))
+    }
+
+    pub fn is_error_at(&self, n: usize) -> bool {
+        self.0
+            .pointer(&format!("/methodResponses/{n}/0"))
+            .and_then(|v| v.as_str())
+            == Some("error")
+    }
+
+    pub fn error_type_at(&self, n: usize) -> Option<&str> {
+        self.0
+            .pointer(&format!("/methodResponses/{n}/1/type"))
+            .and_then(|v| v.as_str())
+    }
+
+    pub fn session_state(&self) -> Option<&str> {
+        self.0.pointer("/sessionState").and_then(|v| v.as_str())
     }
 
     pub fn list_array(&self) -> &Value {
