@@ -34,6 +34,8 @@ pub enum Directory {
     Ldap(LdapDirectory),
     Sql(SqlDirectory),
     OpenId(OpenIdDirectory),
+    #[cfg(feature = "dir-sim")]
+    DirSim(backend::dirsim::DirSimDirectory),
     Unavailable(UnavailableDirectory),
 }
 
