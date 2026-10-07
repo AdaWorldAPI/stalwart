@@ -6,6 +6,7 @@
 
 use crate::{Command, ResponseCode, ResponseType, StatusResponse};
 use ahash::AHashSet;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use compact_str::CompactString;
 use std::{cmp::Ordering, fmt::Display};
@@ -34,6 +35,7 @@ pub mod status;
 pub mod store;
 pub mod subscribe;
 pub mod thread;
+pub mod uidbatches;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolVersion {
@@ -208,11 +210,7 @@ pub fn quoted_string(buf: &mut Vec<u8>, text: &str) {
 }
 
 pub fn quoted_or_literal_string(buf: &mut Vec<u8>, text: &str) {
-    if text
-        .as_bytes()
-        .iter()
-        .any(|ch| [b'\\', b'"', b'\r', b'\n'].contains(ch))
-    {
+    if text.as_bytes().iter().any(|ch| b"\\\"\r\n".contains(ch)) {
         literal_string(buf, text.as_bytes())
     } else {
         buf.push(b'"');
@@ -223,6 +221,28 @@ pub fn quoted_or_literal_string(buf: &mut Vec<u8>, text: &str) {
 pub fn quoted_or_literal_string_or_nil(buf: &mut Vec<u8>, text: Option<&str>) {
     if let Some(text) = text {
         quoted_or_literal_string(buf, text);
+    } else {
+        buf.extend_from_slice(b"NIL");
+    }
+}
+
+pub fn quoted_or_literal_encoded_string(buf: &mut Vec<u8>, text: &str, is_utf8: bool) {
+    if is_utf8 || text.is_ascii() {
+        quoted_or_literal_string(buf, text);
+    } else {
+        buf.extend_from_slice(b"\"=?utf-8?B?");
+        buf.extend_from_slice(STANDARD.encode(text.as_bytes()).as_bytes());
+        buf.extend_from_slice(b"?=\"");
+    }
+}
+
+pub fn quoted_or_literal_encoded_string_or_nil(
+    buf: &mut Vec<u8>,
+    text: Option<&str>,
+    is_utf8: bool,
+) {
+    if let Some(text) = text {
+        quoted_or_literal_encoded_string(buf, text, is_utf8);
     } else {
         buf.extend_from_slice(b"NIL");
     }
@@ -534,6 +554,18 @@ impl ResponseCode {
                 return;
             }
             ResponseCode::UseAttr => b"USEATTR",
+            ResponseCode::UidRequired => b"UIDREQUIRED",
+            ResponseCode::TooFew => b"TOOFEW",
+            ResponseCode::TooMany => b"TOOMANY",
+            ResponseCode::MessageLimit { limit, uid } => {
+                buf.extend_from_slice(b"MESSAGELIMIT ");
+                buf.extend_from_slice(limit.to_string().as_bytes());
+                if let Some(uid) = uid {
+                    buf.push(b' ');
+                    buf.extend_from_slice(uid.to_string().as_bytes());
+                }
+                return;
+            }
         });
     }
 
@@ -577,6 +609,10 @@ impl ResponseCode {
             ResponseCode::ObjectId { .. } => "OBJECTID",
             ResponseCode::HighestModseq { .. } => "HIGHESTMODSEQ",
             ResponseCode::UseAttr => "USEATTR",
+            ResponseCode::UidRequired => "UIDREQUIRED",
+            ResponseCode::TooFew => "TOOFEW",
+            ResponseCode::TooMany => "TOOMANY",
+            ResponseCode::MessageLimit { .. } => "MESSAGELIMIT",
         }
     }
 }
@@ -641,7 +677,13 @@ pub trait SerializeResponse {
 impl SerializeResponse for trc::Error {
     fn serialize(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(128);
-        if let Some(tag) = self.value_as_str(trc::Key::Id) {
+        if let Some(tag) = self
+            .keys()
+            .iter()
+            .rev()
+            .find_map(|(key, value)| (*key == trc::Key::Id).then_some(value))
+            .and_then(|value| value.as_str())
+        {
             buf.extend_from_slice(tag.as_bytes());
         } else {
             buf.push(b'*');
@@ -720,6 +762,7 @@ pub fn serialize_sequence(buf: &mut Vec<u8>, list: &[u32]) {
 impl Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
+            Command::UidBatches => write!(f, "UIDBATCHES"),
             Command::Capability => write!(f, "CAPABILITY"),
             Command::Noop => write!(f, "NOOP"),
             Command::Logout => write!(f, "LOGOUT"),
@@ -776,8 +819,50 @@ impl Display for Command {
 #[cfg(test)]
 mod tests {
     use crate::parser::parse_sequence_set;
-    use crate::protocol::ObjectId;
+    use crate::protocol::{ObjectId, SerializeResponse};
     use types::id::Id;
+
+    #[test]
+    fn serialize_error_uses_command_tag() {
+        for (error, expected) in [
+            (
+                trc::AuthEvent::Failed.into_err().id("a1"),
+                "a1 NO [AUTHENTICATIONFAILED] ",
+            ),
+            (
+                trc::AuthEvent::Failed
+                    .into_err()
+                    .ctx(trc::Key::Id, 7u32)
+                    .id("a1"),
+                "a1 NO [AUTHENTICATIONFAILED] ",
+            ),
+            (
+                trc::AuthEvent::Error
+                    .into_err()
+                    .ctx(trc::Key::Id, "12")
+                    .id("a2"),
+                "a2 NO [AUTHENTICATIONFAILED] ",
+            ),
+            (
+                trc::AuthEvent::TooManyAttempts
+                    .into_err()
+                    .caused_by(trc::AuthEvent::Failed.into_err().ctx(trc::Key::Id, 7u32))
+                    .id("a3"),
+                "a3 NO [AUTHENTICATIONFAILED] ",
+            ),
+            (
+                trc::AuthEvent::Failed.into_err().ctx(trc::Key::Id, 7u32),
+                "* NO [AUTHENTICATIONFAILED] ",
+            ),
+        ] {
+            let response = error.serialize();
+            assert!(
+                response.starts_with(expected.as_bytes()),
+                "{:?} does not start with {expected:?}",
+                String::from_utf8_lossy(&response)
+            );
+        }
+    }
 
     #[test]
     fn serialize_objectid_compound() {

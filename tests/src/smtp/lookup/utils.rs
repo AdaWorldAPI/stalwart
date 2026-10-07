@@ -207,7 +207,7 @@ async fn strategies() {
         env_id: None,
         priority: 0,
         size: 978,
-        quota_keys: Default::default(),
+        metadata: Default::default(),
     };
 
     assert_eq!(

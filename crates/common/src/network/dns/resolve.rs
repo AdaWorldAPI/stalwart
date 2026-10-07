@@ -19,7 +19,7 @@ impl Server {
             .await
         {
             Ok(result) => Ok(result.rrset.iter().any(|mx| !mx.exchanges.is_empty())),
-            Err(Error::DnsRecordNotFound(_)) => Ok(false),
+            Err(Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
@@ -40,7 +40,7 @@ impl Server {
             .await
         {
             Ok(result) => Ok(!result.is_empty()),
-            Err(Error::DnsRecordNotFound(_)) => Ok(false),
+            Err(Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
@@ -56,7 +56,7 @@ impl Server {
                 .await
             {
                 Ok(result) => Ok(!result.rrset.is_empty()),
-                Err(Error::DnsRecordNotFound(_)) => Ok(false),
+                Err(Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => Ok(false),
                 Err(err) => Err(err.into()),
             }
         } else {
@@ -74,7 +74,7 @@ impl Server {
             .await
         {
             Ok(result) => Ok(!result.rrset.is_empty()),
-            Err(Error::DnsRecordNotFound(_)) => Ok(false),
+            Err(Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }
@@ -89,7 +89,7 @@ impl Server {
             .await
         {
             Ok(result) => Ok(!result.rrset.is_empty()),
-            Err(Error::DnsRecordNotFound(_)) => Ok(false),
+            Err(Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => Ok(false),
             Err(err) => Err(err.into()),
         }
     }

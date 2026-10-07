@@ -15,11 +15,12 @@ use crate::outbound::lookup::{DnsLookup, SourceIp};
 use crate::outbound::mta_sts::lookup::MtaStsLookup;
 use crate::outbound::mta_sts::verify::VerifyPolicy;
 use crate::outbound::{client::StartTlsResult, dane::verify::TlsaVerify};
-use crate::queue::dsn::SendDsn;
-use crate::queue::spool::SmtpSpool;
+use crate::queue::dsn::{DsnStatus, SendDsn};
+use crate::queue::spool::{DSN_RETRY, SmtpSpool};
 use crate::queue::throttle::IsAllowed;
 use crate::queue::{
-    Error, FROM_REPORT, HostResponse, MessageWrapper, QueueEnvelope, QueuedMessage, Status,
+    Error, FROM_REPORT, HostResponse, MessageWrapper, Metadata, QueueEnvelope, QueuedMessage,
+    Status,
 };
 use crate::reporting::send::MtaReportSend;
 use crate::{queue::ErrorDetails, reporting::tls::TlsRptOptions};
@@ -147,13 +148,14 @@ impl QueuedMessage {
         });
     }
 
+    #[allow(clippy::type_complexity)]
     async fn deliver_task(self, server: Server, mut message: MessageWrapper) -> QueueEventStatus {
         // Check that the message still has recipients to be delivered
         let has_pending_delivery = message.has_pending_delivery();
         let span_id = message.span_id;
 
         // Send any due Delivery Status Notifications
-        server.send_dsn(&mut message).await;
+        let dsn_status = server.send_dsn(&mut message).await;
 
         match has_pending_delivery {
             PendingDelivery::Yes(true)
@@ -161,31 +163,34 @@ impl QueuedMessage {
                     .message
                     .next_delivery_event(self.queue_name.into())
                     .is_some_and(|due| due <= now()) => {}
-            PendingDelivery::No => {
+            PendingDelivery::No if dsn_status == DsnStatus::Completed => {
                 trc::event!(
                     Delivery(DeliveryEvent::Completed),
                     SpanId = span_id,
                     Elapsed = trc::Value::Duration((now() - message.message.created) * 1000)
                 );
 
-                // All message recipients expired, do not re-queue. (DSN has been already sent)
+                // All message recipients expired, do not re-queue.
                 message.remove(&server, self.due.into()).await;
 
                 return QueueEventStatus::Completed;
             }
+            PendingDelivery::No => {
+                message
+                    .save_changes(&server, self.due.into(), Some(now() + DSN_RETRY))
+                    .await;
+                return QueueEventStatus::Deferred;
+            }
             _ => {
                 // Re-queue the message if its not yet due for delivery
-                message.save_changes(&server, self.due.into()).await;
+                message.save_changes(&server, self.due.into(), None).await;
                 return QueueEventStatus::Deferred;
             }
         }
 
         // Throttle sender
         for throttle in &server.core.smtp.queue.outbound_limiters.sender {
-            if let Err(retry_at) = server
-                .is_allowed(throttle, &message.message, message.span_id)
-                .await
-            {
+            if let Err(retry_at) = server.is_allowed(throttle, &message, message.span_id).await {
                 trc::event!(
                     Delivery(DeliveryEvent::RateLimitExceeded),
                     Id = throttle.id.to_string(),
@@ -209,7 +214,7 @@ impl QueuedMessage {
                     }
                 }
 
-                message.save_changes(&server, self.due.into()).await;
+                message.save_changes(&server, self.due.into(), None).await;
 
                 return QueueEventStatus::Deferred;
             }
@@ -218,7 +223,19 @@ impl QueuedMessage {
         // Group recipients by route
         let queue_config = &server.core.smtp.queue;
         let now_ = now();
-        let mut routes: AHashMap<(&str, &RoutingStrategy), Vec<usize>> = AHashMap::new();
+        let mut routes: AHashMap<(&str, &RoutingStrategy, Option<&[u8]>), Vec<usize>> =
+            AHashMap::new();
+        let mut has_rcpt_headers = false;
+        let mut default_rcpt_header = None;
+        for metadata in message.message.metadata.iter() {
+            if let Metadata::Headers { value, id } = metadata {
+                has_rcpt_headers = true;
+                if *id == u64::MAX {
+                    default_rcpt_header = Some(value.as_ref());
+                    break;
+                }
+            }
+        }
         for (rcpt_idx, rcpt) in message.message.recipients.iter().enumerate() {
             if matches!(
                 &rcpt.status,
@@ -235,8 +252,21 @@ impl QueuedMessage {
                     message.span_id,
                 );
 
+                // Map RCPT headers
+                let mut rcpt_headers = default_rcpt_header;
+                if has_rcpt_headers {
+                    for metadata in message.message.metadata.iter() {
+                        if let Metadata::Headers { value, id } = metadata
+                            && *id == rcpt_idx as u64
+                        {
+                            rcpt_headers = Some(value.as_ref());
+                            break;
+                        }
+                    }
+                }
+
                 routes
-                    .entry((rcpt.domain_part(), route))
+                    .entry((rcpt.domain_part(), route, rcpt_headers))
                     .or_default()
                     .push(rcpt_idx);
             }
@@ -244,7 +274,7 @@ impl QueuedMessage {
 
         let no_ip = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
         let mut delivery_results: Vec<DeliveryResult> = Vec::new();
-        'next_route: for ((domain, route), rcpt_idxs) in routes {
+        'next_route: for ((domain, route, rcpt_headers), rcpt_idxs) in routes {
             trc::event!(
                 Delivery(DeliveryEvent::DomainDeliveryStart),
                 SpanId = message.span_id,
@@ -300,77 +330,79 @@ impl QueuedMessage {
             );
 
             // Obtain TLS reporting
-            let tls_report =
-                if is_smtp && mx_config.is_some() && (message.message.flags & FROM_REPORT == 0) {
-                    match server
-                        .eval_if(
-                            &server.core.smtp.report.tls.send,
-                            &envelope,
-                            message.span_id,
-                        )
-                        .await
-                        .unwrap_or(AggregateFrequency::Never)
-                    {
-                        interval @ (AggregateFrequency::Hourly
-                        | AggregateFrequency::Daily
-                        | AggregateFrequency::Weekly) => {
-                            let time = Instant::now();
-                            match server
-                                .core
-                                .smtp
-                                .resolvers
-                                .dns
-                                .txt_lookup::<TlsRpt>(
-                                    format!("_smtp._tls.{domain}."),
-                                    Some(&server.inner.cache.dns_txt),
-                                )
-                                .await
-                            {
-                                Ok(record) => {
-                                    trc::event!(
-                                        TlsRpt(TlsRptEvent::RecordFetch),
-                                        SpanId = message.span_id,
-                                        Domain = domain.to_string(),
-                                        Details = record
-                                            .rua
-                                            .iter()
-                                            .map(|uri| trc::Value::from(match uri {
-                                                mail_auth::mta_sts::ReportUri::Mail(uri)
-                                                | mail_auth::mta_sts::ReportUri::Http(uri) =>
-                                                    uri.to_string(),
-                                            }))
-                                            .collect::<Vec<_>>(),
-                                        Elapsed = time.elapsed(),
-                                    );
+            let tls_report = if is_smtp
+                && mx_config.is_some()
+                && (message.message.flags & FROM_REPORT == 0)
+            {
+                match server
+                    .eval_if(
+                        &server.core.smtp.report.tls.send,
+                        &envelope,
+                        message.span_id,
+                    )
+                    .await
+                    .unwrap_or(AggregateFrequency::Never)
+                {
+                    interval @ (AggregateFrequency::Hourly
+                    | AggregateFrequency::Daily
+                    | AggregateFrequency::Weekly) => {
+                        let time = Instant::now();
+                        match server
+                            .core
+                            .smtp
+                            .resolvers
+                            .dns
+                            .txt_lookup::<TlsRpt>(
+                                format!("_smtp._tls.{domain}."),
+                                Some(&server.inner.cache.dns_txt),
+                            )
+                            .await
+                        {
+                            Ok(record) => {
+                                trc::event!(
+                                    TlsRpt(TlsRptEvent::RecordFetch),
+                                    SpanId = message.span_id,
+                                    Domain = domain.to_string(),
+                                    Details = record
+                                        .rua
+                                        .iter()
+                                        .map(|uri| trc::Value::from(match uri {
+                                            mail_auth::mta_sts::ReportUri::Mail(uri)
+                                            | mail_auth::mta_sts::ReportUri::Http(uri) =>
+                                                uri.to_string(),
+                                        }))
+                                        .collect::<Vec<_>>(),
+                                    Elapsed = time.elapsed(),
+                                );
 
-                                    TlsRptOptions { record, interval }.into()
-                                }
-                                Err(mail_auth::Error::DnsRecordNotFound(_)) => {
-                                    trc::event!(
-                                        TlsRpt(TlsRptEvent::RecordNotFound),
-                                        SpanId = message.span_id,
-                                        Domain = domain.to_string(),
-                                        Elapsed = time.elapsed(),
-                                    );
-                                    None
-                                }
-                                Err(err) => {
-                                    trc::event!(
-                                        TlsRpt(TlsRptEvent::RecordFetchError),
-                                        SpanId = message.span_id,
-                                        Domain = domain.to_string(),
-                                        CausedBy = trc::Error::from(err),
-                                        Elapsed = time.elapsed(),
-                                    );
-                                    None
-                                }
+                                TlsRptOptions { record, interval }.into()
+                            }
+                            Err(mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => {
+                                trc::event!(
+                                    TlsRpt(TlsRptEvent::RecordNotFound),
+                                    SpanId = message.span_id,
+                                    Domain = domain.to_string(),
+                                    Elapsed = time.elapsed(),
+                                );
+                                None
+                            }
+                            Err(err) => {
+                                trc::event!(
+                                    TlsRpt(TlsRptEvent::RecordFetchError),
+                                    SpanId = message.span_id,
+                                    Domain = domain.to_string(),
+                                    CausedBy = trc::Error::from(err),
+                                    Elapsed = time.elapsed(),
+                                );
+                                None
                             }
                         }
-                        _ => None,
                     }
-                } else {
-                    None
-                };
+                    _ => None,
+                }
+            } else {
+                None
+            };
 
             // Obtain MTA-STS policy for domain
             let mta_sts_policy = if mx_config.is_some() && tls_strategy.try_mta_sts() && is_smtp {
@@ -400,7 +432,9 @@ impl QueuedMessage {
                         let strict = tls_strategy.is_mta_sts_required();
                         if let Some(tls_report) = &tls_report {
                             match &err {
-                                mta_sts::Error::Dns(mail_auth::Error::DnsRecordNotFound(_)) => {
+                                mta_sts::Error::Dns(mail_auth::Error::Dns(
+                                    mail_auth::DnsError::RecordNotFound(_),
+                                )) => {
                                     if strict {
                                         server.schedule_report(TlsEvent {
                                             policy: PolicyType::Sts(None),
@@ -417,7 +451,9 @@ impl QueuedMessage {
                                         .await;
                                     }
                                 }
-                                mta_sts::Error::Dns(mail_auth::Error::DnsError(_)) => (),
+                                mta_sts::Error::Dns(mail_auth::Error::Dns(
+                                    mail_auth::DnsError::Resolver(_),
+                                )) => (),
                                 _ => {
                                     server
                                         .schedule_report(TlsEvent {
@@ -436,7 +472,9 @@ impl QueuedMessage {
                         }
 
                         match &err {
-                            mta_sts::Error::Dns(mail_auth::Error::DnsRecordNotFound(_)) => {
+                            mta_sts::Error::Dns(mail_auth::Error::Dns(
+                                mail_auth::DnsError::RecordNotFound(_),
+                            )) => {
                                 trc::event!(
                                     MtaSts(MtaStsEvent::PolicyNotFound),
                                     SpanId = message.span_id,
@@ -493,13 +531,25 @@ impl QueuedMessage {
             };
 
             // Obtain remote hosts list
+            let mx_unvalidated = mx_config.is_some() && !tls_strategy.try_dane();
             let mx_list;
             if let Some(mx_config) = mx_config {
                 // Lookup MX
                 let time = Instant::now();
-                mx_list = match server.mx_lookup(domain).await {
+                let mx_lookup = if mx_unvalidated {
+                    server
+                        .core
+                        .smtp
+                        .resolvers
+                        .dns
+                        .mx_lookup(domain, Some(&server.inner.cache.dns_mx))
+                        .await
+                } else {
+                    server.mx_lookup(domain).await
+                };
+                mx_list = match mx_lookup {
                     Ok(mx) => mx,
-                    Err(mail_auth::Error::DnsRecordNotFound(_)) => {
+                    Err(mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => {
                         trc::event!(
                             Delivery(DeliveryEvent::MxLookupFailed),
                             SpanId = message.span_id,
@@ -636,16 +686,51 @@ impl QueuedMessage {
                     message.span_id,
                 );
 
+                let validated_host;
+                let remote_host = if mx_unvalidated && tls_strategy.try_dane() {
+                    let time = Instant::now();
+                    let dnssec_status = match server.mx_lookup(domain).await {
+                        Ok(mx) => mx.dnssec_status,
+                        Err(mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(_))) => {
+                            DnssecStatus::Indeterminate
+                        }
+                        Err(err) => {
+                            trc::event!(
+                                Delivery(DeliveryEvent::MxLookupFailed),
+                                SpanId = message.span_id,
+                                Domain = domain.to_string(),
+                                CausedBy = trc::Error::from(err.clone()),
+                                Elapsed = time.elapsed(),
+                            );
+
+                            last_status = Status::from_mail_auth_error(domain, err);
+                            continue 'next_host;
+                        }
+                    };
+                    validated_host = remote_host.with_dnssec_status(dnssec_status);
+                    &validated_host
+                } else {
+                    remote_host
+                };
+
                 // Obtain source and remote IPs
                 let time = Instant::now();
-                let remote_ips = match server.resolve_host(remote_host, &envelope).await {
-                    Ok(remote_ips) => {
+                let validate_addresses = server.core.smtp.resolvers.dnssec_available
+                    && tls_strategy.try_dane()
+                    && is_smtp
+                    && remote_host.dnssec_status() == DnssecStatus::Secure;
+                let (remote_ips, addresses_dnssec_status) = match server
+                    .resolve_host(remote_host, &envelope, validate_addresses)
+                    .await
+                {
+                    Ok(resolved) => {
                         trc::event!(
                             Delivery(DeliveryEvent::IpLookup),
                             SpanId = message.span_id,
                             Domain = domain.to_string(),
                             Hostname = envelope.mx.to_string(),
-                            Details = remote_ips
+                            Details = resolved
+                                .ips
                                 .iter()
                                 .map(|ip| trc::Value::from(*ip))
                                 .collect::<Vec<_>>(),
@@ -653,7 +738,7 @@ impl QueuedMessage {
                             Elapsed = time.elapsed(),
                         );
 
-                        remote_ips
+                        (resolved.ips, resolved.dnssec_status)
                     }
                     Err(status) => {
                         trc::event!(
@@ -671,11 +756,15 @@ impl QueuedMessage {
                 };
 
                 // Lookup DANE policy
+                let mut dane_requires_encryption = false;
                 let dane_policy = if tls_strategy.try_dane() && is_smtp {
                     let time = Instant::now();
                     let strict = tls_strategy.is_dane_required();
 
-                    match remote_host.dnssec_status() {
+                    let (dnssec_status, dnssec_entity) =
+                        remote_host.dane_status(addresses_dnssec_status);
+
+                    match dnssec_status {
                         DnssecStatus::Secure => {
                             match server
                                 .tlsa_lookup(format!("_25._tcp.{}.", envelope.mx))
@@ -727,7 +816,7 @@ impl QueuedMessage {
                                         }
 
                                         if strict {
-                                            last_status = Status::PermanentFailure(ErrorDetails {
+                                            last_status = Status::TemporaryFailure(ErrorDetails {
                                                 entity: envelope.mx.into(),
                                                 details: Error::DaneError(
                                                     "No valid TLSA records were found".into(),
@@ -735,6 +824,8 @@ impl QueuedMessage {
                                             });
                                             continue 'next_host;
                                         }
+
+                                        dane_requires_encryption = true;
                                         None
                                     }
                                 }
@@ -810,7 +901,7 @@ impl QueuedMessage {
                                                 .await;
                                         }
 
-                                        last_status = Status::PermanentFailure(ErrorDetails {
+                                        last_status = Status::TemporaryFailure(ErrorDetails {
                                             entity: envelope.mx.into(),
                                             details: Error::DaneError(
                                                 "No TLSA DNSSEC records found".into(),
@@ -821,8 +912,12 @@ impl QueuedMessage {
                                     None
                                 }
                                 Err(err) => {
-                                    let not_found =
-                                        matches!(&err, mail_auth::Error::DnsRecordNotFound(_));
+                                    let not_found = matches!(
+                                        &err,
+                                        mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(
+                                            _
+                                        ))
+                                    );
 
                                     if not_found {
                                         trc::event!(
@@ -856,7 +951,7 @@ impl QueuedMessage {
                                                     .await;
                                             }
 
-                                            last_status = Status::PermanentFailure(ErrorDetails {
+                                            last_status = Status::TemporaryFailure(ErrorDetails {
                                                 entity: envelope.mx.into(),
                                                 details: Error::DaneError(
                                                     "No TLSA records found".into(),
@@ -889,12 +984,12 @@ impl QueuedMessage {
                                 SpanId = message.span_id,
                                 Domain = domain.to_string(),
                                 Hostname = envelope.mx.to_string(),
-                                Details = "MX",
+                                Details = dnssec_entity,
                                 Strict = strict,
                                 Elapsed = time.elapsed(),
                             );
 
-                            // Report bogus MX record
+                            // Report bogus DNS record
                             if let Some(tls_report) = &tls_report {
                                 server
                                     .schedule_report(TlsEvent {
@@ -902,9 +997,9 @@ impl QueuedMessage {
                                         domain: domain.to_string(),
                                         failure: FailureDetails::new(ResultType::DnssecInvalid)
                                             .with_receiving_mx_hostname(envelope.mx)
-                                            .with_failure_reason_code(
-                                                "Bogus MX records were found.",
-                                            )
+                                            .with_failure_reason_code(format!(
+                                                "Bogus {dnssec_entity} records were found."
+                                            ))
                                             .into(),
                                         tls_record: tls_report.record.clone(),
                                         interval: tls_report.interval,
@@ -915,7 +1010,9 @@ impl QueuedMessage {
 
                             last_status = Status::TemporaryFailure(ErrorDetails {
                                 entity: envelope.mx.into(),
-                                details: Error::DaneError("Bogus MX records were found".into()),
+                                details: Error::DaneError(
+                                    format!("Bogus {dnssec_entity} records were found").into(),
+                                ),
                             });
                             continue 'next_host;
                         }
@@ -949,7 +1046,7 @@ impl QueuedMessage {
                                         .await;
                                 }
 
-                                last_status = Status::PermanentFailure(ErrorDetails {
+                                last_status = Status::TemporaryFailure(ErrorDetails {
                                     entity: envelope.mx.into(),
                                     details: Error::DaneError(
                                         "No TLSA DNSSEC records found".into(),
@@ -1070,13 +1167,18 @@ impl QueuedMessage {
                     };
 
                     // Prepare TLS connector
+                    let is_mta_sts_enforced = mta_sts_policy
+                        .as_ref()
+                        .is_some_and(|policy| policy.enforce());
                     let is_strict_tls = tls_strategy.is_tls_required()
                         || (message.message.flags & MAIL_REQUIRETLS) != 0
-                        || mta_sts_policy.is_some()
-                        || dane_policy.is_some();
-                    let tls_connector = if tls_strategy.allow_invalid_certs
-                        || remote_host.allow_invalid_certs()
+                        || is_mta_sts_enforced
                         || dane_policy.is_some()
+                        || dane_requires_encryption;
+                    let tls_connector = if dane_policy.is_some()
+                        || dane_requires_encryption
+                        || remote_host.allow_invalid_certs()
+                        || (tls_strategy.allow_invalid_certs && !is_mta_sts_enforced)
                     {
                         &server.inner.data.smtp_connectors.dummy_verify
                     } else {
@@ -1214,6 +1316,7 @@ impl QueuedMessage {
                                         .deliver(
                                             smtp_client,
                                             rcpt_idxs,
+                                            rcpt_headers,
                                             &mut delivery_results,
                                             params,
                                         )
@@ -1273,6 +1376,7 @@ impl QueuedMessage {
                                             .deliver(
                                                 smtp_client,
                                                 rcpt_idxs,
+                                                rcpt_headers,
                                                 &mut delivery_results,
                                                 params,
                                             )
@@ -1329,7 +1433,13 @@ impl QueuedMessage {
                             );
 
                             message
-                                .deliver(smtp_client, rcpt_idxs, &mut delivery_results, params)
+                                .deliver(
+                                    smtp_client,
+                                    rcpt_idxs,
+                                    rcpt_headers,
+                                    &mut delivery_results,
+                                    params,
+                                )
                                 .await
                         }
                     } else {
@@ -1369,7 +1479,13 @@ impl QueuedMessage {
 
                         // Deliver message
                         message
-                            .deliver(smtp_client, rcpt_idxs, &mut delivery_results, params)
+                            .deliver(
+                                smtp_client,
+                                rcpt_idxs,
+                                rcpt_headers,
+                                &mut delivery_results,
+                                params,
+                            )
                             .await
                     }
 
@@ -1407,7 +1523,7 @@ impl QueuedMessage {
         }
 
         // Send Delivery Status Notifications
-        server.send_dsn(&mut message).await;
+        let dsn_status = server.send_dsn(&mut message).await;
 
         // Notify queue manager
         if message.message.next_event(None).is_some() {
@@ -1423,7 +1539,13 @@ impl QueuedMessage {
             );
 
             // Save changes to disk
-            message.save_changes(&server, self.due.into()).await;
+            message.save_changes(&server, self.due.into(), None).await;
+
+            QueueEventStatus::Deferred
+        } else if dsn_status == DsnStatus::Deferred {
+            message
+                .save_changes(&server, self.due.into(), Some(now() + DSN_RETRY))
+                .await;
 
             QueueEventStatus::Deferred
         } else {

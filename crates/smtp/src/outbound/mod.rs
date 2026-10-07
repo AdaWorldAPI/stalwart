@@ -156,10 +156,14 @@ impl Status<HostResponse<Box<str>>, ErrorDetails> {
 
     pub fn from_mail_auth_error(entity: &str, err: mail_auth::Error) -> Self {
         match &err {
-            mail_auth::Error::DnsRecordNotFound(code) => Status::PermanentFailure(ErrorDetails {
-                entity: entity.into(),
-                details: Error::DnsError(format!("Domain not found: {code:?}").into_boxed_str()),
-            }),
+            mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(code)) => {
+                Status::PermanentFailure(ErrorDetails {
+                    entity: entity.into(),
+                    details: Error::DnsError(
+                        format!("Domain not found: {code:?}").into_boxed_str(),
+                    ),
+                })
+            }
             _ => Status::TemporaryFailure(ErrorDetails {
                 entity: entity.into(),
                 details: Error::DnsError(err.to_string().into_boxed_str()),
@@ -170,7 +174,7 @@ impl Status<HostResponse<Box<str>>, ErrorDetails> {
     pub fn from_mta_sts_error(entity: &str, err: mta_sts::Error) -> Self {
         match &err {
             mta_sts::Error::Dns(err) => match err {
-                mail_auth::Error::DnsRecordNotFound(code) => {
+                mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(code)) => {
                     Status::PermanentFailure(ErrorDetails {
                         entity: entity.into(),
                         details: Error::MtaStsError(
@@ -178,10 +182,12 @@ impl Status<HostResponse<Box<str>>, ErrorDetails> {
                         ),
                     })
                 }
-                mail_auth::Error::InvalidRecordType => Status::PermanentFailure(ErrorDetails {
-                    entity: entity.into(),
-                    details: Error::MtaStsError("Failed to parse MTA-STS DNS record.".into()),
-                }),
+                mail_auth::Error::Dns(mail_auth::DnsError::InvalidRecordType) => {
+                    Status::PermanentFailure(ErrorDetails {
+                        entity: entity.into(),
+                        details: Error::MtaStsError("Failed to parse MTA-STS DNS record.".into()),
+                    })
+                }
                 _ => Status::TemporaryFailure(ErrorDetails {
                     entity: entity.into(),
                     details: Error::MtaStsError(
@@ -300,6 +306,14 @@ impl NextHop<'_> {
     }
 
     #[inline(always)]
+    fn allow_loopback(&self) -> bool {
+        match self {
+            NextHop::MX { .. } => cfg!(feature = "test_mode"),
+            NextHop::Relay(_) => true,
+        }
+    }
+
+    #[inline(always)]
     fn credentials(&self) -> Option<&Credentials> {
         match self {
             NextHop::MX { .. } => None,
@@ -336,10 +350,37 @@ impl NextHop<'_> {
         }
     }
 
-    fn dnssec_status(&self) -> DnssecStatus {
+    pub fn dnssec_status(&self) -> DnssecStatus {
         match self {
             NextHop::MX { dnssec_status, .. } => *dnssec_status,
             NextHop::Relay(_) => DnssecStatus::Indeterminate,
+        }
+    }
+
+    fn with_dnssec_status(&self, dnssec_status: DnssecStatus) -> Self {
+        match self {
+            NextHop::MX {
+                is_implicit,
+                host,
+                config,
+                ..
+            } => NextHop::MX {
+                is_implicit: *is_implicit,
+                host,
+                config,
+                dnssec_status,
+            },
+            NextHop::Relay(relay) => NextHop::Relay(relay),
+        }
+    }
+
+    pub fn dane_status(&self, addresses: DnssecStatus) -> (DnssecStatus, &'static str) {
+        match self.dnssec_status() {
+            DnssecStatus::Secure => match addresses {
+                status @ (DnssecStatus::Insecure | DnssecStatus::Bogus) => (status, "A/AAAA"),
+                _ => (DnssecStatus::Secure, "MX"),
+            },
+            status => (status, "MX"),
         }
     }
 }

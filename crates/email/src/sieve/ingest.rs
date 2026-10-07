@@ -13,9 +13,13 @@ use crate::{
         ingest::{EmailIngest, IngestEmail, IngestSource, IngestedEmail},
     },
 };
-use common::{Server, auth::AccessToken, scripts::plugins::PluginContext};
-use mail_parser::MessageParser;
-use sieve::{Envelope, Event, Input, Mailbox, Recipient, Sieve, SpamStatus};
+use common::{
+    Server, auth::AccessToken, config::mailstore::spamfilter::spam_status,
+    scripts::plugins::PluginContext,
+};
+use mail_builder::headers::date::Date;
+use mail_parser::{HeaderName, MessageParser};
+use sieve::{Envelope, Event, Input, Mailbox, Recipient, Sieve};
 use std::{borrow::Cow, sync::Arc};
 use std::{future::Future, str::FromStr};
 use store::{
@@ -26,7 +30,7 @@ use store::{
         AlignedBytes, Archive, ArchiveVersion, Archiver, BatchBuilder, BlobLink, BlobOp, ValueClass,
     },
 };
-use trc::{AddContext, SieveEvent};
+use trc::{AddContext, SieveEvent, SmtpEvent};
 use types::{
     blob_hash::BlobHash,
     collection::Collection,
@@ -106,6 +110,12 @@ impl SieveScriptIngest for Server {
             );
         };
 
+        let received_headers = message
+            .headers()
+            .iter()
+            .filter(|header| matches!(header.name, HeaderName::Received))
+            .count();
+
         // Obtain mailboxIds
         let account_id = access_token.account_id();
         let mut cache = self
@@ -114,6 +124,7 @@ impl SieveScriptIngest for Server {
             .caused_by(trc::location!())?;
 
         // Create Sieve instance
+        let orcpt = envelope_to.orcpt_parameter();
         let mut instance = self.core.sieve.untrusted_runtime.filter_parsed(message);
 
         // Set account name and email
@@ -129,14 +140,10 @@ impl SieveScriptIngest for Server {
         // Set envelope
         instance.set_envelope(Envelope::From, envelope_from);
         instance.set_envelope(Envelope::To, envelope_to.address.as_str());
-        if let Some(orcpt) = &envelope_to.orcpt {
+        if let Some(orcpt) = &orcpt {
             instance.set_envelope(Envelope::Orcpt, orcpt.as_str());
         }
-        instance.set_spam_status(if envelope_to.is_spam {
-            SpamStatus::Spam
-        } else {
-            SpamStatus::Ham
-        });
+        instance.set_spam_status(spam_status(envelope_to.spam_percentage));
 
         let mut input = Input::script(
             active_script.script_name.to_string(),
@@ -178,8 +185,7 @@ impl SieveScriptIngest for Server {
                             }
                         }
                         sieve::Script::Global(name_) => {
-                            if let Some(script) =
-                                self.get_untrusted_sieve_script(&name_.to_lowercase(), session_id)
+                            if let Some(script) = self.get_untrusted_sieve_script(name_, session_id)
                             {
                                 input = Input::script(name, script.clone());
                             } else {
@@ -193,7 +199,7 @@ impl SieveScriptIngest for Server {
                     } => {
                         if !mailboxes.is_empty() {
                             let mut special_use_ids = Vec::with_capacity(special_use.len());
-                            for role in special_use.iter().map(|v| SpecialUse::parse(v)) {
+                            for role in special_use.iter().map(|v| SpecialUse::parse_use_attr(v)) {
                                 special_use_ids.push(match role {
                                     Some(SpecialUse::Inbox) => INBOX_ID,
                                     Some(SpecialUse::Trash) => TRASH_ID,
@@ -234,7 +240,7 @@ impl SieveScriptIngest for Server {
                         } else if !special_use.is_empty() {
                             let mut result = true;
 
-                            for role in special_use.iter().map(|v| SpecialUse::parse(v)) {
+                            for role in special_use.iter().map(|v| SpecialUse::parse_use_attr(v)) {
                                 match role {
                                     Some(SpecialUse::Inbox | SpecialUse::Trash) => {}
                                     Some(other) if cache.mailbox_by_role(&other).is_some() => {}
@@ -322,7 +328,7 @@ impl SieveScriptIngest for Server {
                         // Find mailbox by role
                         if target_id == u32::MAX
                             && let Some(special_use) =
-                                special_use.as_deref().and_then(SpecialUse::parse)
+                                special_use.as_deref().and_then(SpecialUse::parse_use_attr)
                         {
                             match special_use {
                                 SpecialUse::Inbox => {
@@ -387,6 +393,18 @@ impl SieveScriptIngest for Server {
                     } => {
                         input = true.into();
                         if let Some(message) = messages.get(message_id) {
+                            if received_headers >= self.core.sieve.max_received_headers {
+                                trc::event!(
+                                    Smtp(SmtpEvent::LoopDetected),
+                                    From = mail_from.clone(),
+                                    Total = received_headers,
+                                    Limit = self.core.sieve.max_received_headers,
+                                    SpanId = session_id,
+                                );
+
+                                continue;
+                            }
+
                             let recipients: Vec<String> = match recipient {
                                 Recipient::Address(rcpt) => vec![rcpt],
                                 Recipient::Group(rcpts) => rcpts,
@@ -408,10 +426,19 @@ impl SieveScriptIngest for Server {
                                     SpanId = session_id
                                 );
 
+                                let mut raw_message =
+                                    Vec::with_capacity(160 + message.raw_message.len());
+                                write_received_header(
+                                    &mut raw_message,
+                                    &self.core.network.server_name,
+                                    session_id,
+                                );
+                                raw_message.extend_from_slice(message.raw_message.as_ref());
+
                                 autogenerated.push(AutogeneratedMessage {
                                     sender_address: mail_from.clone(),
                                     recipients,
-                                    message: message.raw_message.to_vec(),
+                                    message: raw_message,
                                 });
                                 do_redirect = true;
                             } else {
@@ -528,7 +555,7 @@ impl SieveScriptIngest for Server {
                         source: IngestSource::Smtp {
                             deliver_to: envelope_to.address.as_str(),
                             is_sender_authenticated: envelope_from_authenticated,
-                            is_spam: envelope_to.is_spam,
+                            is_spam: envelope_to.is_spam() && !sieve_message.did_file_into,
                         },
                         session_id,
                     })
@@ -748,6 +775,16 @@ impl SieveScriptIngest for Server {
             }
         }
     }
+}
+
+fn write_received_header(buf: &mut Vec<u8>, hostname: &str, id: u64) {
+    buf.extend_from_slice(b"Received: from localhost (localhost [127.0.0.1])\r\n\tby ");
+    buf.extend_from_slice(hostname.as_bytes());
+    buf.extend_from_slice(b" (Stalwart SMTP) with LMTP id ");
+    buf.extend_from_slice(format!("{id:X}").as_bytes());
+    buf.extend_from_slice(b";\r\n\t");
+    buf.extend_from_slice(Date::now().to_rfc822().as_bytes());
+    buf.extend_from_slice(b"\r\n");
 }
 
 pub struct CompiledScript {

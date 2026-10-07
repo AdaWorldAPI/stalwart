@@ -84,7 +84,10 @@ impl<T: SessionStream> Session<T> {
                             auth_failures: auth_failures + 1,
                         };
                     } else {
-                        return trc::AuthEvent::TooManyAttempts.into_err().caused_by(err);
+                        return trc::AuthEvent::TooManyAttempts
+                            .into_err()
+                            .caused_by(err)
+                            .id(tag.clone());
                     }
                 }
 
@@ -117,6 +120,9 @@ impl<T: SessionStream> Session<T> {
                     capabilities: Capability::all_capabilities(
                         true,
                         !self.is_tls && self.instance.acceptor.is_tls(),
+                        true,
+                        self.server.core.imap.max_messages_per_command,
+                        self.server.core.imap.max_messages_per_save,
                     ),
                 })
                 .with_tag(tag)
@@ -127,6 +133,11 @@ impl<T: SessionStream> Session<T> {
 
     pub async fn handle_unauthenticate(&mut self, request: Request<Command>) -> trc::Result<()> {
         self.state = State::NotAuthenticated { auth_failures: 0 };
+        self.is_condstore = false;
+        self.is_qresync = false;
+        self.is_utf8 = false;
+        self.is_objectid = false;
+        self.is_uidonly = false;
 
         self.write_bytes(
             StatusResponse::completed(Command::Unauthenticate)

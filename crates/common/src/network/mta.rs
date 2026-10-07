@@ -10,7 +10,7 @@ use crate::{
     config::{
         mailstore::spamfilter::SpamClassifier,
         smtp::{
-            auth::DkimSigner,
+            auth::DkimSigners,
             queue::{
                 ConnectionStrategy, DEFAULT_QUEUE_NAME, MxConfig, QueueExpiry, QueueName,
                 QueueStrategy, RequireOptional, RoutingStrategy, TlsStrategy, VirtualQueue,
@@ -21,6 +21,7 @@ use crate::{
     manager::SPAM_CLASSIFIER_KEY,
     network::RcptResolution,
 };
+use ahash::AHashSet;
 use directory::Recipient;
 use mail_auth::IpLookupStrategy;
 use registry::schema::{enums::ExpressionVariable, structs::MaskedEmail};
@@ -36,9 +37,15 @@ use store::{
 };
 use trc::{AddContext, SpamEvent};
 use types::id::Id;
+use utils::DomainPart;
 
 impl Server {
-    pub async fn rcpt_resolve(&self, rcpt: &str, session_id: u64) -> trc::Result<RcptResolution> {
+    pub async fn rcpt_resolve(
+        &self,
+        rcpt: &str,
+        allow_catch_all: bool,
+        session_id: u64,
+    ) -> trc::Result<RcptResolution> {
         // Obtain domain settings
         let Some((local_part, domain_part)) = rcpt.rsplit_once('@') else {
             return Ok(RcptResolution::UnknownDomain);
@@ -76,14 +83,14 @@ impl Server {
         if self.is_enterprise_edition()
             && let Cow::Borrowed(addr) = &local_part
             && let Some(masked_id) = crate::enterprise::masked::MaskedAddress::parse(addr)
-        {
-            // Masked email resolution
-            return if let Some(masked_entry) = self
+            && let Some(masked_entry) = self
                 .registry()
                 .object::<MaskedEmail>(Id::new(masked_id))
                 .await
                 .caused_by(trc::location!())?
-                && masked_entry.enabled
+        {
+            // Masked email resolution
+            return if masked_entry.enabled
                 && masked_entry
                     .expires_at
                     .is_none_or(|at| at.timestamp() > now() as i64)
@@ -159,7 +166,10 @@ impl Server {
                 }
                 EmailCache::MailingList(id) => {
                     if let Some(list) = self.try_list(id).await? {
-                        return Ok(RcptResolution::Expand(list.recipients.clone()));
+                        return Ok(RcptResolution::Expand(
+                            self.expand_nested_lists(id, list.recipients.clone())
+                                .await?,
+                        ));
                     } else {
                         self.inner
                             .cache
@@ -172,8 +182,15 @@ impl Server {
         }
 
         // Catch-all resolution
-        if let Some(catch_all) = &domain.catch_all {
-            return Ok(RcptResolution::Rewrite(catch_all.to_string()));
+        if allow_catch_all && let Some(catch_all) = &domain.catch_all {
+            return Ok(
+                match Box::pin(self.rcpt_resolve(catch_all, false, session_id)).await? {
+                    resolution @ (RcptResolution::Expand(_) | RcptResolution::Rewrite(_)) => {
+                        resolution
+                    }
+                    _ => RcptResolution::Rewrite(catch_all.to_string()),
+                },
+            );
         }
 
         // Verify whether domain relaying is enabled
@@ -184,11 +201,61 @@ impl Server {
         }
     }
 
+    async fn expand_nested_lists(
+        &self,
+        list_id: u32,
+        recipients: Arc<[Box<str>]>,
+    ) -> trc::Result<Arc<[Box<str>]>> {
+        let mut has_nested = false;
+        for member in recipients.iter() {
+            if let Some(EmailCache::MailingList(_)) = self.rcpt_id_from_email(member).await? {
+                has_nested = true;
+                break;
+            }
+        }
+        if !has_nested {
+            return Ok(recipients);
+        }
+
+        let mut expanded = Vec::with_capacity(recipients.len());
+        let mut seen: AHashSet<Box<str>> = AHashSet::with_capacity(recipients.len());
+        let mut visited = AHashSet::from_iter([list_id]);
+        let mut pending: Vec<Arc<[Box<str>]>> = Vec::new();
+        let mut members = recipients;
+
+        loop {
+            for member in members.iter() {
+                if let Some(EmailCache::MailingList(nested_id)) =
+                    self.rcpt_id_from_email(member).await?
+                {
+                    if !visited.insert(nested_id) {
+                        continue;
+                    }
+                    if let Some(nested) = self.try_list(nested_id).await? {
+                        pending.push(nested.recipients.clone());
+                        continue;
+                    }
+                }
+
+                if seen.insert(member.to_canonical_address().into()) {
+                    expanded.push(member.clone());
+                }
+            }
+
+            let Some(next) = pending.pop() else {
+                break;
+            };
+            members = next;
+        }
+
+        Ok(expanded.into())
+    }
+
     pub async fn get_dkim_signers(
         &self,
         domain: &str,
         session_id: u64,
-    ) -> trc::Result<Option<Arc<[DkimSigner]>>> {
+    ) -> trc::Result<Option<Arc<DkimSigners>>> {
         if let Some(signers) = self.dkim_signers(domain).await? {
             Ok(Some(signers))
         } else {
@@ -203,7 +270,7 @@ impl Server {
     }
 
     pub fn get_trusted_sieve_script(&self, name: &str, session_id: u64) -> Option<&Arc<Sieve>> {
-        self.core.sieve.trusted_scripts.get(name).or_else(|| {
+        self.core.sieve.trusted_script(name).or_else(|| {
             trc::event!(
                 Sieve(trc::SieveEvent::ScriptNotFound),
                 Id = name.to_string(),
@@ -215,7 +282,7 @@ impl Server {
     }
 
     pub fn get_untrusted_sieve_script(&self, name: &str, session_id: u64) -> Option<&Arc<Sieve>> {
-        self.core.sieve.untrusted_scripts.get(name).or_else(|| {
+        self.core.sieve.untrusted_script(name).or_else(|| {
             trc::event!(
                 Sieve(trc::SieveEvent::ScriptNotFound),
                 Id = name.to_string(),

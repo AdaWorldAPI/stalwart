@@ -202,6 +202,12 @@ async fn antispam() {
             Instant::now() + Duration::from_secs(100),
         );
     }
+    // A DNSBL answer with several codes must produce one tag per code
+    test.server.dnsbl_add(
+        "dbl-multi.com.dbl.spamhaus.org",
+        vec!["127.0.1.2".parse().unwrap(), "127.0.1.4".parse().unwrap()],
+        Instant::now() + Duration::from_secs(100),
+    );
     for mx in [
         "domain.org",
         "domain.co.uk",
@@ -520,6 +526,7 @@ async fn antispam() {
                     .spam_classify(
                         &parsed_message,
                         &dkim_domains,
+                        None,
                         arc_result.as_ref(),
                         dmarc_result.as_ref(),
                         dmarc_policy.as_ref(),
@@ -549,6 +556,7 @@ async fn antispam() {
             let mut spam_input = session.build_spam_input(
                 &parsed_message,
                 &dkim_domains,
+                None,
                 arc_result.as_ref(),
                 dmarc_result.as_ref(),
                 dmarc_policy.as_ref(),

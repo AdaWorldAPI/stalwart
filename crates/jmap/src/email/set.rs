@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-SEL
  */
 
-use super::headers::{BuildHeader, ValueToHeader};
 use crate::{
     blob::download::BlobDownload,
     changes::state::JmapCacheState,
@@ -13,6 +12,7 @@ use crate::{
 use common::{
     Server, auth::AccessToken, ipc::PushNotification, storage::index::ObjectIndexBuilder,
 };
+use email::message::headers::{BuildHeader, ValueToHeader};
 use email::{
     cache::{MessageCacheFetch, email::MessageCacheAccess, mailbox::MailboxCacheAccess},
     mailbox::{JUNK_ID, TRASH_ID, UidMailbox},
@@ -739,6 +739,19 @@ impl EmailSet for Server {
                 continue 'create;
             }
 
+            match builder
+                .headers
+                .iter()
+                .position(|(name, _)| name.eq_ignore_ascii_case("Message-ID"))
+            {
+                Some(pos) => {
+                    builder.headers[pos].0 = Cow::Borrowed("Message-ID");
+                }
+                None => {
+                    builder = builder.message_id(self.core.network.message_id());
+                }
+            }
+
             // In test, sort headers to avoid randomness
             #[cfg(feature = "test_mode")]
             {
@@ -839,8 +852,11 @@ impl EmailSet for Server {
                         new_data.set_mailboxes(
                             ids.into_expanded_boolean_set()
                                 .filter_map(|id| {
-                                    UidMailbox::new_unassigned(
-                                        id.try_into_property()?.try_into_id()?.document_id(),
+                                    let mailbox_id =
+                                        id.try_into_property()?.try_into_id()?.document_id();
+                                    UidMailbox::new(
+                                        mailbox_id,
+                                        data.inner.message_uid(mailbox_id).unwrap_or(0),
                                     )
                                     .into()
                                 })

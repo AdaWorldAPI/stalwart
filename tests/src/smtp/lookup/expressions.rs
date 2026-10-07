@@ -33,6 +33,14 @@ const TESTS: &[(&str, &str)] = &[
         "is_local_domain('foobar.org') + '-' + is_local_domain('unknown.org')  + '-' + is_local_address('john@foobar.org') + '-' + is_local_address('unknown@foobar.org')",
         "1-0-1-0",
     ),
+    (
+        "is_local_domain('FooBar.org') + '-' + is_local_address('John@FooBar.org') + '-' + is_local_address('JOHN@FOOBAR.ORG')",
+        "1-1-1",
+    ),
+    (
+        "bit_and(254, 16) + '-' + bit_and(254, 1) + '-' + bit_and(80, 64) + '-' + bit_and(255, 128)",
+        "16-0-64-128",
+    ),
 ];
 
 #[tokio::test]

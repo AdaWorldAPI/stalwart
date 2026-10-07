@@ -194,10 +194,10 @@ trait ShortError {
 impl ShortError for mail_auth::Error {
     fn short_error(&self) -> &'static str {
         match self {
-            mail_auth::Error::DnsError(_) => "temp_fail",
-            mail_auth::Error::DnsRecordNotFound(_) => "not_found",
+            mail_auth::Error::Dns(mail_auth::DnsError::Resolver(_)) => "temp_fail",
+            mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(_)) => "not_found",
             mail_auth::Error::Io(_) => "io_error",
-            mail_auth::Error::InvalidRecordType => "invalid_record",
+            mail_auth::Error::Dns(mail_auth::DnsError::InvalidRecordType) => "invalid_record",
             _ => "unknown_error",
         }
     }
