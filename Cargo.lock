@@ -2132,11 +2132,14 @@ dependencies = [
  "base64 0.23.1",
  "deadpool",
  "jsonwebtoken",
+ "lance-graph-dir-sim",
  "ldap3",
  "mail-builder 1.0.0",
  "mail-parser",
  "md5",
  "nohash-hasher",
+ "ogar-dir-core",
+ "ogar-dir-sim",
  "pbkdf2",
  "pwhash",
  "registry",
@@ -4445,6 +4448,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "lance-graph-contract"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
+name = "lance-graph-dir-sim"
+version = "0.1.0"
+dependencies = [
+ "lance-graph-mask-risc",
+ "lance-graph-quack",
+ "ogar-ad",
+ "ogar-dir-core",
+ "ogar-dir-sim",
+]
+
+[[package]]
+name = "lance-graph-mask-risc"
+version = "0.1.0"
+dependencies = [
+ "ndarray",
+]
+
+[[package]]
+name = "lance-graph-quack"
+version = "0.1.0"
+dependencies = [
+ "lance-graph-contract",
+ "lance-graph-mask-risc",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4805,6 +4843,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "matrixmultiply"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7"
+dependencies = [
+ "autocfg",
+ "rawpointer",
+]
+
+[[package]]
 name = "maybe-async"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5101,6 +5149,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ndarray"
+version = "0.17.2"
+dependencies = [
+ "matrixmultiply",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "paste",
+ "portable-atomic",
+ "portable-atomic-util",
+ "rawpointer",
+]
+
+[[package]]
 name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5374,6 +5436,24 @@ dependencies = [
  "cipher 0.4.4",
  "ctr 0.9.2",
  "subtle",
+]
+
+[[package]]
+name = "ogar-ad"
+version = "0.1.0"
+dependencies = [
+ "ogar-dir-core",
+]
+
+[[package]]
+name = "ogar-dir-core"
+version = "0.1.0"
+
+[[package]]
+name = "ogar-dir-sim"
+version = "0.1.0"
+dependencies = [
+ "ogar-dir-core",
 ]
 
 [[package]]
@@ -6609,6 +6689,12 @@ checksum = "773eb443e9c58d9d356c065bbfea2c04322277c44073b4e0716967d8ccd7ef58"
 dependencies = [
  "rasn",
 ]
+
+[[package]]
+name = "rawpointer"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
 name = "rayon"

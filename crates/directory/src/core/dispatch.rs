@@ -14,6 +14,8 @@ impl Directory {
             Directory::Ldap(store) => store.authenticate(credentials).await,
             Directory::Sql(store) => store.authenticate(credentials).await,
             Directory::OpenId(store) => store.authenticate(credentials).await,
+            #[cfg(feature = "dir-sim")]
+            Directory::DirSim(store) => store.authenticate(credentials).await,
             Directory::Unavailable(directory) => Err(directory.error()),
         }
         .caused_by(trc::location!())
@@ -24,6 +26,8 @@ impl Directory {
             Directory::Ldap(store) => store.recipient(address).await,
             Directory::Sql(store) => store.recipient(address).await,
             Directory::OpenId(_) => Ok(Recipient::Invalid), // OIDC directories do not support recipient lookups
+            #[cfg(feature = "dir-sim")]
+            Directory::DirSim(store) => store.recipient(address).await,
             Directory::Unavailable(directory) => Err(directory.error()),
         }
         .caused_by(trc::location!())
