@@ -22,10 +22,22 @@
 //!
 //! A conflicting address is an error, not a guess: the message is not
 //! delivered to any of the holders.
+//!
+//! The directory also answers what the owner *is*:
+//!
+//! - a group's address is a [`Recipient::Group`], never an account: a group
+//!   has no mailbox and no credentials of its own;
+//! - an account carries its groups ([`Account::groups`]) as their primary
+//!   SMTP addresses, the same shape the LDAP backend produces. Stalwart
+//!   synchronises them into the account's group membership, which is where
+//!   its roles and permissions attach. The list is the directory's whole
+//!   answer (`Some`, possibly empty), so a membership the directory dropped
+//!   is dropped from the account as well. A group without a primary SMTP
+//!   address cannot be named in Stalwart and is left out.
 
-use crate::{Account, Credentials, Recipient};
+use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{VersionStore, View};
+use lance_graph_dir_sim::{GroupOrdinal, VersionStore, View};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
@@ -97,11 +109,33 @@ impl DirSimDirectory {
             .filter(|alias| *alias != email)
             .into_iter()
             .collect();
+        if view.group_ordinal(&owner).is_some() {
+            return Ok(Recipient::Group(Group {
+                email,
+                email_aliases,
+                description: None,
+            }));
+        }
         Ok(Recipient::Account(Account {
             email,
             email_aliases,
+            groups: Some(self.groups_of(view, &owner)),
             ..Default::default()
         }))
+    }
+
+    /// The primary SMTP addresses of the groups `user` is a member of, in
+    /// group order.
+    fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
+        (0..view.groups_len())
+            .filter_map(|i| view.group_guid(GroupOrdinal(u16::try_from(i).ok()?)))
+            .filter(|group| view.exists(group) && view.is_member(user, group))
+            .filter_map(|group| {
+                view.attr(&group, Attribute::PrimarySmtp)
+                    .and_then(|value| self.store.value(value))
+                    .and_then(utils::sanitize_email)
+            })
+            .collect()
     }
 }
 
@@ -135,6 +169,13 @@ mod tests {
     }
 
     fn directory(nodes: Vec<(Guid128, ObservedNode)>) -> DirSimDirectory {
+        directory_with(nodes, vec![])
+    }
+
+    fn directory_with(
+        nodes: Vec<(Guid128, ObservedNode)>,
+        members: Vec<(Guid128, Guid128)>,
+    ) -> DirSimDirectory {
         let mut store = VersionStore::new();
         let version = store
             .observe(
@@ -143,7 +184,7 @@ mod tests {
                 Observation {
                     scope: SCOPE,
                     nodes,
-                    members: vec![],
+                    members,
                 },
             )
             .unwrap();
@@ -154,8 +195,49 @@ mod tests {
         Recipient::Account(Account {
             email: email.into(),
             email_aliases: aliases.iter().map(|a| a.to_string()).collect(),
+            groups: Some(vec![]),
             ..Default::default()
         })
+    }
+
+    fn group(smtp: Option<&str>) -> ObservedNode {
+        let mut g = ObservedNode::group();
+        g.primary_smtp = smtp.map(Into::into);
+        g
+    }
+
+    // The account carries the groups the directory says it is in, by their
+    // primary SMTP address; a non-member group and an address-less group are
+    // not listed.
+    #[tokio::test]
+    async fn an_account_carries_its_groups() {
+        let dir = directory_with(
+            vec![
+                (g(0xA1), user_a()),
+                (g(0x61), group(Some("sales@example.org"))),
+                (g(0x62), group(Some("legal@example.org"))),
+                (g(0x63), group(None)),
+            ],
+            vec![(g(0xA1), g(0x61)), (g(0xA1), g(0x63))],
+        );
+        let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
+            panic!("expected an account");
+        };
+        assert_eq!(acct.groups, Some(vec!["sales@example.org".to_string()]));
+    }
+
+    // A group's address names a group, not an account: no mailbox, no
+    // credentials.
+    #[tokio::test]
+    async fn a_group_address_is_a_group_not_an_account() {
+        let dir = directory(vec![(g(0x61), group(Some("sales@example.org")))]);
+        assert_eq!(
+            dir.recipient("sales@example.org").await.unwrap(),
+            Recipient::Group(Group {
+                email: "sales@example.org".into(),
+                ..Default::default()
+            })
+        );
     }
 
     #[tokio::test]
