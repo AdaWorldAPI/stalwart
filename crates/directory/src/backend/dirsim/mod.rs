@@ -25,9 +25,10 @@
 //!    recipient lifecycle). `Disable-RemoteMailbox` clears the addresses
 //!    with the mailbox, so a deprovisioned user's address normally has no
 //!    holder at all (step 2). The guard covers a holder the address rule
-//!    still names without a mailbox, today only through a `mail` value,
-//!    which is a display label. The object's account is untouched: it stays
-//!    in the directory, disabled. A disabled shared mailbox is a mailbox and
+//!    still names without a mailbox: an enabled account that is not
+//!    mail-enabled holds its UPN and any SMTP values it carries. `mail` is a
+//!    display label and holds nothing. The object's account is untouched: it
+//!    stays in the directory. A disabled shared mailbox is a mailbox and
 //!    still receives.
 //! 4. Only the answer is turned back into text: the owner's primary SMTP
 //!    address becomes the account's address.
@@ -92,8 +93,8 @@ impl DirSimDirectory {
         let view = self.view()?;
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
-            // Named, but the object has no mailbox (the address rule still
-            // reads its `mail` label): nothing receives at it. The object's
+            // Named, but the object has no mailbox (an enabled account that
+            // is not mail-enabled): nothing receives at it. The object's
             // account is the directory's, not this lookup's.
             Ok(Some(holder)) if !view.is_mail_recipient(&holder) => Ok(Recipient::Invalid),
             Ok(Some(owner)) => self.account(&view, owner, address),
@@ -309,8 +310,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_contested_address_is_refused_not_guessed() {
-        let mut b = ObservedNode::user("b.upn@example.org", "b@example.org");
-        b.mail = Some("a@example.org".into());
+        // A's primary SMTP address is B's UPN: two holders.
+        let b = ObservedNode::user("a@example.org", "b@example.org");
         let dir = directory(vec![(g(0xA1), user_a()), (g(0xB0), b)]);
         let err = dir.recipient("a@example.org").await.unwrap_err();
         assert_eq!(
@@ -343,21 +344,35 @@ mod tests {
         );
     }
 
-    /// An object without a mailbox that the address rule still names
-    /// through its `mail` label gets no mailbox either.
+    /// An enabled account that is not mail-enabled still holds its
+    /// addresses, so the address rule names it; it gets no mailbox.
     #[tokio::test]
-    async fn a_mail_label_on_a_non_recipient_gives_no_mailbox() {
-        // The primary SMTP address a mailbox would be named by is still set,
-        // so without the guard this would provision an account.
-        let mut d = ObservedNode::user("d.upn@example.org", "left@example.org");
-        d.active = Some(false);
-        d.mail = Some("d@example.org".into());
+    async fn an_enabled_account_without_a_mailbox_gets_no_mailbox() {
+        // The account holds `d@` as its primary SMTP address, so without the
+        // guard this would provision an account.
+        let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(true);
         d.recipient = Some(ObservedRecipient::default());
         let dir = directory(vec![(g(0xDD), d)]);
         assert_eq!(
             dir.recipient("d@example.org").await.unwrap(),
             Recipient::Invalid
         );
+    }
+
+    /// `mail` is a display label: another user carrying it claims nothing,
+    /// and the address names its real mailbox.
+    #[tokio::test]
+    async fn a_mail_label_on_another_user_claims_nothing() {
+        let mut other = ObservedNode::user("o.upn@example.org", "o@example.org");
+        other.mail = Some("shared@example.org".into());
+        let mut s = ObservedNode::user("s.upn@example.org", "shared@example.org");
+        s.mail = Some("shared@example.org".into());
+        let dir = directory(vec![(g(0x01), other), (g(0x02), s)]);
+        assert!(matches!(
+            dir.recipient("shared@example.org").await.unwrap(),
+            Recipient::Account(_)
+        ));
     }
 
     /// A disabled shared mailbox is still a recipient.
