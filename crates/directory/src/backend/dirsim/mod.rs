@@ -17,10 +17,15 @@
 //!    (`Dicts::key_lookup`: normalised, counted, never minting).
 //! 2. `validate::address_owner` decides on ids only: no holder, exactly
 //!    one holder, or a conflict listing every holder.
-//! 3. The holder must receive mail (`View::is_mail_recipient`, OGAR's
-//!    recipient lifecycle). A holder that no longer does — a departed user
-//!    whose stale `mail` still reserves the address — is no recipient, and
-//!    no account is provisioned for it. A disabled shared mailbox still is.
+//! 3. In [`Mode::Production`] the holder must receive mail
+//!    (`View::is_mail_recipient`, OGAR's recipient lifecycle). A holder that
+//!    no longer does — a departed user whose stale `mail` still reserves the
+//!    address — is no recipient, and no account is provisioned for it. A
+//!    disabled shared mailbox still is. In [`Mode::Simulation`] the holder
+//!    keeps its account whatever its lifecycle says: the simulated world
+//!    must still contain the object, so a plan that re-enables it, or the
+//!    behaviour Exchange shows for it, can be observed rather than erased
+//!    at this boundary.
 //! 4. Only the answer is turned back into text: the owner's primary SMTP
 //!    address becomes the account's address.
 //!
@@ -48,6 +53,21 @@ use ogar_dir_sim::{Attribute, VersionId, Violation};
 pub struct DirSimDirectory {
     store: VersionStore,
     version: VersionId,
+    mode: Mode,
+}
+
+/// What the directory answers for an address holder that receives no mail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    /// A live mail server: such a holder gets no account, so mail to it is
+    /// refused.
+    #[default]
+    Production,
+    /// A simulation: every holder keeps its account, named by its primary
+    /// SMTP address or, without one, by the address it was found under.
+    /// Whether it receives is the simulated recipient lifecycle's business,
+    /// not this lookup's.
+    Simulation,
 }
 
 impl DirSimDirectory {
@@ -55,10 +75,19 @@ impl DirSimDirectory {
     /// does not exist, so a misconfigured directory is caught at startup
     /// rather than at the first recipient.
     pub fn new(store: VersionStore, version: VersionId) -> Result<Self, String> {
+        Self::with_mode(store, version, Mode::Production)
+    }
+
+    /// [`DirSimDirectory::new`] with an explicit [`Mode`].
+    pub fn with_mode(store: VersionStore, version: VersionId, mode: Mode) -> Result<Self, String> {
         store
             .view(version)
             .map_err(|err| format!("dir-sim version {version:?}: {err:?}"))?;
-        Ok(Self { store, version })
+        Ok(Self {
+            store,
+            version,
+            mode,
+        })
     }
 
     fn view(&self) -> trc::Result<View<'_>> {
@@ -85,9 +114,13 @@ impl DirSimDirectory {
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
             // Held, but by an object that no longer receives mail (a
-            // departed user's stale `mail`): the address stays reserved and
-            // no account is provisioned for it.
-            Ok(Some(holder)) if !view.is_mail_recipient(&holder) => Ok(Recipient::Invalid),
+            // departed user's stale `mail`): in production the address stays
+            // reserved and no account is provisioned for it. A simulation
+            // keeps the object.
+            Ok(Some(holder)) if !view.is_mail_recipient(&holder) => match self.mode {
+                Mode::Production => Ok(Recipient::Invalid),
+                Mode::Simulation => self.account(&view, holder, address),
+            },
             Ok(Some(owner)) => self.account(&view, owner, address),
             Err(Violation::AddressConflict { holders, .. }) => Err(trc::StoreEvent::DataCorruption
                 .into_err()
@@ -105,13 +138,20 @@ impl DirSimDirectory {
     /// The address that was asked for is an alias when it differs, because
     /// the directory has just proved the owner holds it.
     fn account(&self, view: &View<'_>, owner: Guid128, address: &str) -> trc::Result<Recipient> {
-        let Some(email) = view
+        let primary = view
             .attr(&owner, Attribute::PrimarySmtp)
             .and_then(|value| self.store.value(value))
-            .and_then(utils::sanitize_email)
-        else {
+            .and_then(utils::sanitize_email);
+        let email = match (primary, self.mode) {
+            (Some(email), _) => email,
+            // A simulated object is named by the address it was found
+            // under, which the directory has just proved it holds.
+            (None, Mode::Simulation) => match utils::sanitize_email(address) {
+                Some(email) => email,
+                None => return Ok(Recipient::Invalid),
+            },
             // An owner without a primary SMTP address has no mailbox.
-            return Ok(Recipient::Invalid);
+            (None, Mode::Production) => return Ok(Recipient::Invalid),
         };
         let email_aliases = utils::sanitize_email(address)
             .filter(|alias| *alias != email)
@@ -329,6 +369,67 @@ mod tests {
             dir.recipient("d@example.org").await.unwrap(),
             Recipient::Invalid
         );
+    }
+
+    fn simulated(nodes: Vec<(Guid128, ObservedNode)>) -> DirSimDirectory {
+        let dir = directory(nodes);
+        DirSimDirectory::with_mode(dir.store, dir.version, Mode::Simulation).unwrap()
+    }
+
+    /// The same departed user in a simulation keeps its account: the object
+    /// still exists in the simulated world.
+    #[tokio::test]
+    async fn a_departed_user_keeps_its_account_in_a_simulation() {
+        let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(false);
+        d.mail = Some("d@example.org".into());
+        d.recipient = Some(ObservedRecipient::default());
+        assert_eq!(
+            simulated(vec![(g(0xDD), d)])
+                .recipient("d@example.org")
+                .await
+                .unwrap(),
+            account("d@example.org", &[])
+        );
+    }
+
+    /// Offboarding also clears the primary SMTP address; the stale `mail`
+    /// still names the object in a simulation, and nothing in production.
+    #[tokio::test]
+    async fn a_departed_user_without_primary_smtp_is_named_by_its_address() {
+        let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(false);
+        d.primary_smtp = None;
+        d.mail = Some("d@example.org".into());
+        d.recipient = Some(ObservedRecipient::default());
+        assert_eq!(
+            simulated(vec![(g(0xDD), d.clone())])
+                .recipient("d@example.org")
+                .await
+                .unwrap(),
+            account("d@example.org", &[])
+        );
+        assert_eq!(
+            directory(vec![(g(0xDD), d)])
+                .recipient("d@example.org")
+                .await
+                .unwrap(),
+            Recipient::Invalid
+        );
+    }
+
+    /// The mode changes only the answer for holders that receive no mail:
+    /// unknown and contested addresses are refused either way.
+    #[tokio::test]
+    async fn a_simulation_still_refuses_unknown_and_contested_addresses() {
+        let mut b = ObservedNode::user("b.upn@example.org", "b@example.org");
+        b.mail = Some("a@example.org".into());
+        let dir = simulated(vec![(g(0xA1), user_a()), (g(0xB0), b)]);
+        assert_eq!(
+            dir.recipient("nobody@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+        assert!(dir.recipient("a@example.org").await.is_err());
     }
 
     /// A disabled shared mailbox is still a recipient.
