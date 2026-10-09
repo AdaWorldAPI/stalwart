@@ -30,6 +30,10 @@
 //!    display label and holds nothing. The object's account is untouched: it
 //!    stays in the directory. A disabled shared mailbox is a mailbox and
 //!    still receives.
+//!    With the cloud observed ([`DirSimDirectory::with_cloud`]), a remote
+//!    mailbox also needs its Exchange Online mailbox, tied to the AD
+//!    object by OGAR's hybrid correspondence fold on GUIDs. Without it, AD
+//!    alone decides.
 //! 4. Only the answer is turned back into text: the owner's primary SMTP
 //!    address becomes the account's address.
 //!
@@ -50,13 +54,16 @@
 
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{GroupOrdinal, VersionStore, View};
+use lance_graph_dir_sim::{CloudMailboxes, GroupOrdinal, VersionStore, View};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
 pub struct DirSimDirectory {
     store: VersionStore,
     version: VersionId,
+    /// The Exchange Online mailboxes, when the cloud was observed. `None`
+    /// is "not observed" (AD alone decides), not "no mailboxes".
+    cloud: Option<CloudMailboxes>,
 }
 
 impl DirSimDirectory {
@@ -67,7 +74,27 @@ impl DirSimDirectory {
         store
             .view(version)
             .map_err(|err| format!("dir-sim version {version:?}: {err:?}"))?;
-        Ok(Self { store, version })
+        Ok(Self {
+            store,
+            version,
+            cloud: None,
+        })
+    }
+
+    /// Decide remote mailboxes with the cloud observed: `cloud` comes from
+    /// `CloudMailboxes::from_fold` over the AD, Entra and Exchange Online
+    /// observations of this directory.
+    pub fn with_cloud(mut self, cloud: CloudMailboxes) -> Self {
+        self.cloud = Some(cloud);
+        self
+    }
+
+    /// Whether mail to `node` is delivered to it in `view`.
+    fn receives(&self, view: &View<'_>, node: &Guid128) -> bool {
+        match &self.cloud {
+            Some(cloud) => cloud.delivers_to(view, node),
+            None => view.is_mail_recipient(node),
+        }
     }
 
     fn view(&self) -> trc::Result<View<'_>> {
@@ -94,9 +121,10 @@ impl DirSimDirectory {
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
             // Named, but the object has no mailbox (an enabled account that
-            // is not mail-enabled): nothing receives at it. The object's
-            // account is the directory's, not this lookup's.
-            Ok(Some(holder)) if !view.is_mail_recipient(&holder) => Ok(Recipient::Invalid),
+            // is not mail-enabled, or a remote mailbox missing in Exchange
+            // Online): nothing receives at it. The object's account is the
+            // directory's, not this lookup's.
+            Ok(Some(holder)) if !self.receives(&view, &holder) => Ok(Recipient::Invalid),
             Ok(Some(owner)) => self.account(&view, owner, address),
             Err(Violation::AddressConflict { holders, .. }) => Err(trc::StoreEvent::DataCorruption
                 .into_err()
@@ -400,5 +428,67 @@ mod tests {
     async fn a_missing_version_is_rejected_at_construction() {
         let store = VersionStore::new();
         assert!(DirSimDirectory::new(store, VersionId(42)).is_err());
+    }
+
+    /// The fold over A (anchor + backsync to its Entra object), the Entra
+    /// object, and `mailboxes` Exchange Online mailboxes for it.
+    fn cloud(mailboxes: u8) -> CloudMailboxes {
+        use ogar_dir_core::correspond::{IdColumn, Index, Lanes, Output, Rows, fold, state};
+        let (a, anchor, entra) = (g(0xA1), g(0x0A), g(0x0E));
+        let present = |c: &mut IdColumn, id: Guid128| {
+            c.id.push(id);
+            c.state.push(state::PRESENT);
+        };
+        let row = |r: &mut Rows, owner: Guid128| {
+            r.owner.push(owner);
+            r.scope.push(0);
+            r.at.push(1_000);
+        };
+        let mut l = Lanes::default();
+        row(&mut l.ad, a);
+        present(&mut l.ad_anchor, anchor);
+        present(&mut l.ad_backsync, entra);
+        row(&mut l.entra, entra);
+        present(&mut l.entra_anchor, anchor);
+        for n in 0..mailboxes {
+            row(&mut l.exo, g(0xE0 + n));
+            present(&mut l.exo_external, entra);
+        }
+        let ix = Index::build(&l);
+        let mut out = Output::for_index(&l, &ix);
+        fold(&l, &ix, &mut out);
+        CloudMailboxes::from_fold(&l, &ix, &out)
+    }
+
+    /// With the cloud observed, A's remote mailbox gets an account only
+    /// when its Exchange Online mailbox exists.
+    #[tokio::test]
+    async fn a_remote_mailbox_needs_its_cloud_mailbox() {
+        let with = directory(vec![(g(0xA1), user_a())]).with_cloud(cloud(1));
+        assert_eq!(
+            with.recipient("a@example.org").await.unwrap(),
+            account("a@example.org", &[])
+        );
+        let without = directory(vec![(g(0xA1), user_a())]).with_cloud(cloud(0));
+        assert_eq!(
+            without.recipient("a@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+        let ambiguous = directory(vec![(g(0xA1), user_a())]).with_cloud(cloud(2));
+        assert_eq!(
+            ambiguous.recipient("a@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+    }
+
+    /// Not observed is not observed empty: without the cloud, AD alone
+    /// decides, as before.
+    #[tokio::test]
+    async fn without_the_cloud_ad_alone_decides() {
+        let dir = directory(vec![(g(0xA1), user_a())]);
+        assert_eq!(
+            dir.recipient("a@example.org").await.unwrap(),
+            account("a@example.org", &[])
+        );
     }
 }
