@@ -7,17 +7,29 @@
 //! A recipient directory backed by `lance-graph-dir-sim`.
 //!
 //! Stalwart resolves every inbound recipient through
-//! [`Directory::recipient`](crate::Directory::recipient). An
+//! [`Directory::recipient`](crate::Directory::recipient). The question is
+//! about a **mailbox**: does mail to this address land somewhere? An
 //! [`Recipient::Account`] answer is synchronised into Stalwart's own
-//! account registry (`synchronize_account`), which is what gives the
-//! recipient its mailbox. This backend answers that question from one
-//! version of a simulated directory:
+//! registry (`synchronize_account`), which is what gives the recipient its
+//! mailbox. Stalwart names the answer after its principal, but a directory
+//! account and a mailbox are two things: an account can exist with no
+//! mailbox (a departed user, login disabled and mailbox deprovisioned), and this
+//! lookup answers only for the mailbox. It answers from one version of a
+//! simulated directory:
 //!
 //! 1. The recipient text crosses into the directory once, as a `KeyId`
 //!    (`Dicts::key_lookup`: normalised, counted, never minting).
 //! 2. `validate::address_owner` decides on ids only: no holder, exactly
 //!    one holder, or a conflict listing every holder.
-//! 3. Only the answer is turned back into text: the owner's primary SMTP
+//! 3. The holder must receive mail (`View::is_mail_recipient`, OGAR's
+//!    recipient lifecycle). `Disable-RemoteMailbox` clears the addresses
+//!    with the mailbox, so a deprovisioned user's address normally has no
+//!    holder at all (step 2). The guard covers a holder the address rule
+//!    still names without a mailbox, today only through a `mail` value,
+//!    which is a display label. The object's account is untouched: it stays
+//!    in the directory, disabled. A disabled shared mailbox is a mailbox and
+//!    still receives.
+//! 4. Only the answer is turned back into text: the owner's primary SMTP
 //!    address becomes the account's address.
 //!
 //! A conflicting address is an error, not a guess: the message is not
@@ -80,6 +92,10 @@ impl DirSimDirectory {
         let view = self.view()?;
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
+            // Named, but the object has no mailbox (the address rule still
+            // reads its `mail` label): nothing receives at it. The object's
+            // account is the directory's, not this lookup's.
+            Ok(Some(holder)) if !view.is_mail_recipient(&holder) => Ok(Recipient::Invalid),
             Ok(Some(owner)) => self.account(&view, owner, address),
             Err(Violation::AddressConflict { holders, .. }) => Err(trc::StoreEvent::DataCorruption
                 .into_err()
@@ -305,6 +321,63 @@ mod tests {
         assert_eq!(
             dir.recipient("b@example.org").await.unwrap(),
             account("b@example.org", &[])
+        );
+    }
+
+    /// D-IAM-IDENTITY-0: a departed user after `Disable-RemoteMailbox` —
+    /// login disabled, recipient attributes cleared except the deprovision
+    /// bit (code 8). Nothing holds the address any more.
+    #[tokio::test]
+    async fn a_departed_user_gets_no_mailbox() {
+        let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(false);
+        d.primary_smtp = None;
+        d.recipient = Some(ObservedRecipient {
+            remote_recipient_type: Some(8),
+            ..ObservedRecipient::default()
+        });
+        let dir = directory(vec![(g(0xDD), d)]);
+        assert_eq!(
+            dir.recipient("d@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+    }
+
+    /// An object without a mailbox that the address rule still names
+    /// through its `mail` label gets no mailbox either.
+    #[tokio::test]
+    async fn a_mail_label_on_a_non_recipient_gives_no_mailbox() {
+        // The primary SMTP address a mailbox would be named by is still set,
+        // so without the guard this would provision an account.
+        let mut d = ObservedNode::user("d.upn@example.org", "left@example.org");
+        d.active = Some(false);
+        d.mail = Some("d@example.org".into());
+        d.recipient = Some(ObservedRecipient::default());
+        let dir = directory(vec![(g(0xDD), d)]);
+        assert_eq!(
+            dir.recipient("d@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+    }
+
+    /// A disabled shared mailbox is still a recipient.
+    #[tokio::test]
+    async fn a_disabled_shared_mailbox_gets_an_account() {
+        let mut s = ObservedNode::user("s.upn@example.org", "shared@example.org");
+        s.active = Some(false);
+        s.mail = Some("shared@example.org".into());
+        s.alias = Some("shared".into());
+        s.proxies = vec!["smtp:shared@tenant.mail.onmicrosoft.com".into()];
+        s.recipient = Some(ObservedRecipient {
+            remote_recipient_type: Some(97),
+            display_type: Some(-2_147_483_642),
+            type_details: Some(34_359_738_368),
+            target_address: Some("shared@tenant.mail.onmicrosoft.com".into()),
+        });
+        let dir = directory(vec![(g(0x5A), s)]);
+        assert_eq!(
+            dir.recipient("shared@example.org").await.unwrap(),
+            account("shared@example.org", &[])
         );
     }
 
