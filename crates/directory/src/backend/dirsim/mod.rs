@@ -13,7 +13,7 @@
 //! registry (`synchronize_account`), which is what gives the recipient its
 //! mailbox. Stalwart names the answer after its principal, but a directory
 //! account and a mailbox are two things: an account can exist with no
-//! mailbox (a departed user, disabled and no longer mail-enabled), and this
+//! mailbox (a departed user, login disabled and mailbox deprovisioned), and this
 //! lookup answers only for the mailbox. It answers from one version of a
 //! simulated directory:
 //!
@@ -22,11 +22,13 @@
 //! 2. `validate::address_owner` decides on ids only: no holder, exactly
 //!    one holder, or a conflict listing every holder.
 //! 3. The holder must receive mail (`View::is_mail_recipient`, OGAR's
-//!    recipient lifecycle). A holder that no longer does — a departed user
-//!    whose stale `mail` still reserves the address — has no mailbox, so
-//!    the address is no recipient. Its account is untouched: it is still in
-//!    the directory, disabled, and a simulation still sees it there. A
-//!    disabled shared mailbox is a mailbox and still receives.
+//!    recipient lifecycle). `Disable-RemoteMailbox` clears the addresses
+//!    with the mailbox, so a deprovisioned user's address normally has no
+//!    holder at all (step 2). The guard covers a holder the address rule
+//!    still names without a mailbox, today only through a `mail` value,
+//!    which is a display label. The object's account is untouched: it stays
+//!    in the directory, disabled. A disabled shared mailbox is a mailbox and
+//!    still receives.
 //! 4. Only the answer is turned back into text: the owner's primary SMTP
 //!    address becomes the account's address.
 //!
@@ -90,10 +92,9 @@ impl DirSimDirectory {
         let view = self.view()?;
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
-            // Held, but by an object with no mailbox (a departed user's
-            // stale `mail`): the address stays reserved and nothing receives
-            // at it. The object's account is the directory's, not this
-            // lookup's, and is not affected.
+            // Named, but the object has no mailbox (the address rule still
+            // reads its `mail` label): nothing receives at it. The object's
+            // account is the directory's, not this lookup's.
             Ok(Some(holder)) if !view.is_mail_recipient(&holder) => Ok(Recipient::Invalid),
             Ok(Some(owner)) => self.account(&view, owner, address),
             Err(Violation::AddressConflict { holders, .. }) => Err(trc::StoreEvent::DataCorruption
@@ -323,11 +324,32 @@ mod tests {
         );
     }
 
-    /// D-IAM-IDENTITY-0: a departed user (disabled, not mail-enabled) whose
-    /// `mail` and primary SMTP are still set.
+    /// D-IAM-IDENTITY-0: a departed user after `Disable-RemoteMailbox` —
+    /// login disabled, recipient attributes cleared except the deprovision
+    /// bit (code 8). Nothing holds the address any more.
     #[tokio::test]
     async fn a_departed_user_gets_no_mailbox() {
         let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(false);
+        d.primary_smtp = None;
+        d.recipient = Some(ObservedRecipient {
+            remote_recipient_type: Some(8),
+            ..ObservedRecipient::default()
+        });
+        let dir = directory(vec![(g(0xDD), d)]);
+        assert_eq!(
+            dir.recipient("d@example.org").await.unwrap(),
+            Recipient::Invalid
+        );
+    }
+
+    /// An object without a mailbox that the address rule still names
+    /// through its `mail` label gets no mailbox either.
+    #[tokio::test]
+    async fn a_mail_label_on_a_non_recipient_gives_no_mailbox() {
+        // The primary SMTP address a mailbox would be named by is still set,
+        // so without the guard this would provision an account.
+        let mut d = ObservedNode::user("d.upn@example.org", "left@example.org");
         d.active = Some(false);
         d.mail = Some("d@example.org".into());
         d.recipient = Some(ObservedRecipient::default());
