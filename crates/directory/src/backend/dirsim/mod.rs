@@ -61,7 +61,7 @@
 
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{Closure, CloudMailboxes, VersionStore, View};
+use lance_graph_dir_sim::{CloudMailboxes, VersionStore, View};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
@@ -178,7 +178,7 @@ impl DirSimDirectory {
     /// The primary SMTP addresses of the groups `user` is a member of,
     /// directly or through nested groups of any kind, in group order.
     fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
-        view.groups_transitive(user, Closure::Delivery)
+        view.groups_transitive(user)
             .into_iter()
             .filter(|group| view.exists(group))
             .filter_map(|group| {
