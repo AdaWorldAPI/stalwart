@@ -30,7 +30,8 @@
 //!    holder either. `mail` is a property on the user's business card,
 //!    like the telephone number: shown in the address book and used inside
 //!    messages, it follows the user rather than the mailbox; it is not the
-//!    recipient's identity (`PrimarySmtpAddress` is), not received at and
+//!    recipient's identity (immutably the mailbox's `ExchangeGuid`,
+//!    implicitly its mutable `PrimarySmtpAddress`), not received at and
 //!    not provisioned, and holds nothing. The guard covers the one holder that does not receive: with
 //!    the cloud observed, a remote mailbox Exchange Online does not hold.
 //!    The object's account is untouched: it
