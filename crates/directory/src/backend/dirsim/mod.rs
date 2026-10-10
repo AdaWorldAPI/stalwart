@@ -59,6 +59,8 @@
 //!   is dropped from the account as well. A group without a primary SMTP
 //!   address cannot be named in Stalwart and is left out.
 
+use std::collections::HashSet;
+
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
 use lance_graph_dir_sim::{CloudMailboxes, GroupProperty, GroupWhere, VersionStore, View};
@@ -175,13 +177,29 @@ impl DirSimDirectory {
         }))
     }
 
-    /// The primary SMTP addresses of the lists `user` receives mail
-    /// through, in group order. Mail is chained addressing: a list reaches
-    /// `user` directly or through nested lists, each by its own address, so
-    /// a group without an address ends the chain.
+    /// The primary SMTP addresses of the groups `user` is a member of, as
+    /// Stalwart means it: a group's addresses become the account's, and a
+    /// group's ACL grants become the account's. So the list is two chains,
+    /// in group order:
+    ///
+    /// * the mail chain: a list reaches `user` directly or through nested
+    ///   lists, each by its own address, so a group without an address ends
+    ///   it;
+    /// * the SID chain: a security group passes its permissions down through
+    ///   nested security groups, with or without an address; a group without
+    ///   a SID ends it.
+    ///
+    /// Stalwart names a group by its address, so only addressed groups are
+    /// listed. A group reached only through a group without an address and
+    /// without a SID is not.
     fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
-        view.groups_transitive_through(user, &GroupWhere::Is(GroupProperty::MailEnabled))
-            .into_iter()
+        let mail =
+            view.groups_transitive_through(user, &GroupWhere::Is(GroupProperty::MailEnabled));
+        let sid = view.security_identifiers(user);
+        let mut seen = HashSet::new();
+        mail.into_iter()
+            .chain(sid)
+            .filter(|group| seen.insert(*group))
             .filter(|group| view.exists(group))
             .filter_map(|group| {
                 view.attr(&group, Attribute::PrimarySmtp)
@@ -259,6 +277,12 @@ mod tests {
         g
     }
 
+    fn security_group(smtp: Option<&str>) -> ObservedNode {
+        let mut g = group(smtp);
+        g.security = Some(true);
+        g
+    }
+
     // The account carries the groups the directory says it is in, by their
     // primary SMTP address; a non-member group and an address-less group are
     // not listed.
@@ -309,6 +333,33 @@ mod tests {
                 "legal@example.org".to_string()
             ])
         );
+    }
+
+    // Permissions follow the SID chain: a security group without an
+    // address passes on the addressed security group it is nested in, so
+    // Stalwart keeps that group's ACL grants. A distribution group without
+    // an address has neither an address nor a SID and ends both chains.
+    #[tokio::test]
+    async fn an_account_keeps_the_groups_its_sid_chain_reaches() {
+        let dir = directory_with(
+            vec![
+                (g(0xA1), user_a()),
+                (g(0x71), security_group(None)),
+                (g(0x72), security_group(Some("finance@example.org"))),
+                (g(0x73), group(None)),
+                (g(0x74), security_group(Some("hr@example.org"))),
+            ],
+            vec![
+                (g(0xA1), g(0x71)),
+                (g(0x71), g(0x72)),
+                (g(0xA1), g(0x73)),
+                (g(0x73), g(0x74)),
+            ],
+        );
+        let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
+            panic!("expected an account");
+        };
+        assert_eq!(acct.groups, Some(vec!["finance@example.org".to_string()]));
     }
 
     // A group's address names a group, not an account: no mailbox, no
