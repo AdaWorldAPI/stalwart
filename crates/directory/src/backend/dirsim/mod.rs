@@ -61,7 +61,7 @@
 
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{CloudMailboxes, VersionStore, View};
+use lance_graph_dir_sim::{CloudMailboxes, GroupProperty, GroupWhere, VersionStore, View};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
@@ -175,10 +175,12 @@ impl DirSimDirectory {
         }))
     }
 
-    /// The primary SMTP addresses of the groups `user` is a member of,
-    /// directly or through nested groups of any kind, in group order.
+    /// The primary SMTP addresses of the lists `user` receives mail
+    /// through, in group order. Mail is chained addressing: a list reaches
+    /// `user` directly or through nested lists, each by its own address, so
+    /// a group without an address ends the chain.
     fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
-        view.groups_transitive(user)
+        view.groups_transitive_through(user, &GroupWhere::Is(GroupProperty::MailEnabled))
             .into_iter()
             .filter(|group| view.exists(group))
             .filter_map(|group| {
@@ -277,18 +279,25 @@ mod tests {
         assert_eq!(acct.groups, Some(vec!["sales@example.org".to_string()]));
     }
 
-    // Groups are followed through nesting of any kind: A is in the
-    // address-less 0x63, which is in legal, so A carries legal too.
+    // Mail is chained addressing: A is in team, which is in legal, so A
+    // carries both. A is also in an address-less group nested in board; that
+    // group cannot be addressed, so the chain to board ends there.
     #[tokio::test]
     async fn an_account_carries_its_nested_groups() {
         let dir = directory_with(
             vec![
                 (g(0xA1), user_a()),
-                (g(0x61), group(Some("sales@example.org"))),
+                (g(0x61), group(Some("team@example.org"))),
                 (g(0x62), group(Some("legal@example.org"))),
                 (g(0x63), group(None)),
+                (g(0x64), group(Some("board@example.org"))),
             ],
-            vec![(g(0xA1), g(0x61)), (g(0xA1), g(0x63)), (g(0x63), g(0x62))],
+            vec![
+                (g(0xA1), g(0x61)),
+                (g(0x61), g(0x62)),
+                (g(0xA1), g(0x63)),
+                (g(0x63), g(0x64)),
+            ],
         );
         let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
             panic!("expected an account");
@@ -296,7 +305,7 @@ mod tests {
         assert_eq!(
             acct.groups,
             Some(vec![
-                "sales@example.org".to_string(),
+                "team@example.org".to_string(),
                 "legal@example.org".to_string()
             ])
         );
