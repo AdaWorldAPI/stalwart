@@ -1,0 +1,106 @@
+name: dir-sim
+
+# The `dir-sim` feature of the `directory` crate path-depends on AdaWorldAPI
+# siblings (lance-graph-dir-sim, ogar-dir-core, ogar-dir-sim, and ndarray
+# through lance-graph), so this job checks them out side by side at `main`,
+# the layout a developer's machine has. It is the only CI that builds the
+# feature: a sibling change that breaks the backend shows up here instead of
+# on the next local build.
+#
+# A store backend is enabled (`store/sqlite`) because the directory crate's
+# store imports are gated on one; without it clippy reports an unused import
+# in upstream code that this feature does not touch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - crates/directory/**
+      - .github/workflows/dir-sim.yml
+  schedule:
+    # Daily, to catch sibling drift on days nothing here changes.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-C debuginfo=0"
+  RUST_BACKTRACE: "1"
+  # The siblings pin Rust 1.99.0 in their rust-toolchain.toml; this repo has
+  # no pin of its own.
+  TOOLCHAIN: "1.99.0"
+  FEATURES: "dir-sim,store/sqlite"
+
+jobs:
+  dir-sim:
+    name: Directory dir-sim backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: stalwart
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: stalwart
+          persist-credentials: false
+      - name: Checkout AdaWorldAPI/lance-graph (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: AdaWorldAPI/lance-graph
+          path: lance-graph
+          persist-credentials: false
+      - name: Checkout AdaWorldAPI/OGAR (sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: AdaWorldAPI/OGAR
+          path: OGAR
+          persist-credentials: false
+      - name: Checkout AdaWorldAPI/ndarray (sibling of lance-graph)
+        uses: actions/checkout@v4
+        with:
+          repository: AdaWorldAPI/ndarray
+          path: ndarray
+          persist-credentials: false
+      - name: Setup rust toolchain
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal -c clippy -c rustfmt
+          rustup override set "$TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: stalwart
+      - name: clippy
+        run: cargo clippy -p directory --all-targets --features "$FEATURES" -- -D warnings
+      - name: test
+        run: cargo test -p directory --features "$FEATURES"
+      - name: The tests pinning the backend's decisions exist
+        # A renamed or deleted pinning test fails the job instead of
+        # silently dropping out of the run.
+        run: |
+          cargo test -q -p directory --features "$FEATURES" -- --list \
+            > "$RUNNER_TEMP/tests.txt"
+          missing=0
+          while read -r name; do
+            [ -z "$name" ] && continue
+            if ! grep -Fxq "backend::dirsim::tests::$name: test" "$RUNNER_TEMP/tests.txt"; then
+              echo "::error::missing pinning test: $name"
+              missing=1
+            fi
+          done <<'LIST'
+          a_contested_address_is_refused_not_guessed
+          a_departed_user_gets_no_mailbox
+          a_disabled_shared_mailbox_gets_an_account
+          a_mail_label_on_another_user_claims_nothing
+          a_remote_mailbox_needs_its_cloud_mailbox
+          an_enabled_account_without_a_mailbox_gets_no_mailbox
+          without_the_cloud_ad_alone_decides
+          LIST
+          exit "$missing"
