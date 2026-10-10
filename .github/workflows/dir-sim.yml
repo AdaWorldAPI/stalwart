@@ -100,6 +100,8 @@ jobs:
           a_disabled_shared_mailbox_gets_an_account
           a_mail_label_on_another_user_claims_nothing
           a_remote_mailbox_needs_its_cloud_mailbox
+          an_account_carries_its_groups
+          an_account_carries_its_nested_groups
           an_enabled_account_without_a_mailbox_gets_no_mailbox
           without_the_cloud_ad_alone_decides
           LIST
