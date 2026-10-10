@@ -24,10 +24,15 @@
 //! 3. The holder must receive mail (`View::is_mail_recipient`, OGAR's
 //!    recipient lifecycle). `Disable-RemoteMailbox` clears the addresses
 //!    with the mailbox, so a deprovisioned user's address normally has no
-//!    holder at all (step 2). The guard covers a holder the address rule
-//!    still names without a mailbox: an enabled account that is not
-//!    mail-enabled holds its UPN and any SMTP values it carries. `mail` is a
-//!    display label and holds nothing. The object's account is untouched: it
+//!    holder at all (step 2). Mail addresses are provisioned by the
+//!    recipient type, so an enabled account that is not mail-enabled holds
+//!    its UPN but none of the SMTP values it still carries: those have no
+//!    holder either. `mail` is the licence plate: shown in the address
+//!    book and used inside messages, a label any account may carry; it is
+//!    not identity, not received at and not provisioned, and holds
+//!    nothing. The guard covers the one holder that does not receive: with
+//!    the cloud observed, a remote mailbox Exchange Online does not hold.
+//!    The object's account is untouched: it
 //!    stays in the directory. A disabled shared mailbox is a mailbox and
 //!    still receives.
 //!    With the cloud observed ([`DirSimDirectory::with_cloud`]), a remote
@@ -120,9 +125,8 @@ impl DirSimDirectory {
         let view = self.view()?;
         match address_owner(&view, key) {
             Ok(None) => Ok(Recipient::Invalid),
-            // Named, but the object has no mailbox (an enabled account that
-            // is not mail-enabled, or a remote mailbox missing in Exchange
-            // Online): nothing receives at it. The object's account is the
+            // Named, but the object has no mailbox (a remote mailbox missing
+            // in Exchange Online): nothing receives at it. The object's account is the
             // directory's, not this lookup's.
             Ok(Some(holder)) if !self.receives(&view, &holder) => Ok(Recipient::Invalid),
             Ok(Some(owner)) => self.account(&view, owner, address),
@@ -372,12 +376,11 @@ mod tests {
         );
     }
 
-    /// An enabled account that is not mail-enabled still holds its
-    /// addresses, so the address rule names it; it gets no mailbox.
+    /// An enabled account that is not mail-enabled gets no mailbox: its
+    /// recipient type provisions none of the SMTP values it still carries,
+    /// so `d@` has no holder.
     #[tokio::test]
     async fn an_enabled_account_without_a_mailbox_gets_no_mailbox() {
-        // The account holds `d@` as its primary SMTP address, so without the
-        // guard this would provision an account.
         let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
         d.active = Some(true);
         d.recipient = Some(ObservedRecipient::default());
@@ -388,8 +391,9 @@ mod tests {
         );
     }
 
-    /// `mail` is a display label: another user carrying it claims nothing,
-    /// and the address names its real mailbox.
+    /// `mail` is the licence plate, a label any account may carry: another
+    /// user carrying it claims nothing, and the address names its real
+    /// mailbox.
     #[tokio::test]
     async fn a_mail_label_on_another_user_claims_nothing() {
         let mut other = ObservedNode::user("o.upn@example.org", "o@example.org");
