@@ -27,10 +27,11 @@
 //!    holder at all (step 2). Mail addresses are provisioned by the
 //!    recipient type, so an enabled account that is not mail-enabled holds
 //!    its UPN but none of the SMTP values it still carries: those have no
-//!    holder either. `mail` is the licence plate on the user object:
-//!    shown in the address book and used inside messages, it follows the
-//!    user rather than the mailbox; it is not identity, not received at
-//!    and not provisioned, and holds nothing. The guard covers the one holder that does not receive: with
+//!    holder either. `mail` is a property on the user's business card,
+//!    like the telephone number: shown in the address book and used inside
+//!    messages, it follows the user rather than the mailbox; it is not the
+//!    recipient's identity (`PrimarySmtpAddress` is), not received at and
+//!    not provisioned, and holds nothing. The guard covers the one holder that does not receive: with
 //!    the cloud observed, a remote mailbox Exchange Online does not hold.
 //!    The object's account is untouched: it
 //!    stays in the directory. A disabled shared mailbox is a mailbox and
@@ -391,9 +392,9 @@ mod tests {
         );
     }
 
-    /// `mail` is the user's licence plate and may name another user's
-    /// address: that user claims nothing by it, and the address names its
-    /// real mailbox.
+    /// `mail` is a business-card property of the user and may name another
+    /// user's address: the user carrying it claims nothing by it, and the
+    /// address names its real mailbox.
     #[tokio::test]
     async fn a_mail_label_on_another_user_claims_nothing() {
         let mut other = ObservedNode::user("o.upn@example.org", "o@example.org");
