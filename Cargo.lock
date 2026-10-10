@@ -4463,8 +4463,11 @@ dependencies = [
  "lance-graph-mask-risc",
  "lance-graph-quack",
  "ogar-ad",
+ "ogar-az",
  "ogar-dir-core",
  "ogar-dir-sim",
+ "unicase",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -5151,6 +5154,7 @@ dependencies = [
 [[package]]
 name = "ndarray"
 version = "0.17.2"
+source = "git+https://github.com/AdaWorldAPI/ndarray?branch=master#8afa92da446be073e83f186b0dfcc807ee5d1b8e"
 dependencies = [
  "matrixmultiply",
  "num-complex",
@@ -5443,6 +5447,14 @@ name = "ogar-ad"
 version = "0.1.0"
 dependencies = [
  "ogar-dir-core",
+]
+
+[[package]]
+name = "ogar-az"
+version = "0.1.0"
+dependencies = [
+ "ogar-dir-core",
+ "serde_json",
 ]
 
 [[package]]

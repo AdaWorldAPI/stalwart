@@ -61,7 +61,7 @@
 
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{CloudMailboxes, GroupOrdinal, VersionStore, View};
+use lance_graph_dir_sim::{Closure, CloudMailboxes, VersionStore, View};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
@@ -175,12 +175,12 @@ impl DirSimDirectory {
         }))
     }
 
-    /// The primary SMTP addresses of the groups `user` is a member of, in
-    /// group order.
+    /// The primary SMTP addresses of the groups `user` is a member of,
+    /// directly or through nested groups of any kind, in group order.
     fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
-        (0..view.groups_len())
-            .filter_map(|i| view.group_guid(GroupOrdinal(u16::try_from(i).ok()?)))
-            .filter(|group| view.exists(group) && view.is_member(user, group))
+        view.groups_transitive(user, Closure::Delivery)
+            .into_iter()
+            .filter(|group| view.exists(group))
             .filter_map(|group| {
                 view.attr(&group, Attribute::PrimarySmtp)
                     .and_then(|value| self.store.value(value))
@@ -275,6 +275,31 @@ mod tests {
             panic!("expected an account");
         };
         assert_eq!(acct.groups, Some(vec!["sales@example.org".to_string()]));
+    }
+
+    // Groups are followed through nesting of any kind: A is in the
+    // address-less 0x63, which is in legal, so A carries legal too.
+    #[tokio::test]
+    async fn an_account_carries_its_nested_groups() {
+        let dir = directory_with(
+            vec![
+                (g(0xA1), user_a()),
+                (g(0x61), group(Some("sales@example.org"))),
+                (g(0x62), group(Some("legal@example.org"))),
+                (g(0x63), group(None)),
+            ],
+            vec![(g(0xA1), g(0x61)), (g(0xA1), g(0x63)), (g(0x63), g(0x62))],
+        );
+        let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
+            panic!("expected an account");
+        };
+        assert_eq!(
+            acct.groups,
+            Some(vec![
+                "sales@example.org".to_string(),
+                "legal@example.org".to_string()
+            ])
+        );
     }
 
     // A group's address names a group, not an account: no mailbox, no
