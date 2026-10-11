@@ -77,3 +77,13 @@ incremental = false
 debug-assertions = false
 overflow-checks = false
 rpath = false
+
+# lance-graph-dir-sim names OGAR by git (so other repositories can depend on
+# it); this repository names the same crates by path. `[patch]` only applies
+# in the workspace root, so redirect the git source here: one ogar-dir-core,
+# whose types unify across the directory crate and dir-sim.
+[patch."https://github.com/AdaWorldAPI/OGAR"]
+ogar-dir-core = { path = "../OGAR/crates/ogar-dir-core" }
+ogar-dir-sim = { path = "../OGAR/crates/ogar-dir-sim" }
+ogar-ad = { path = "../OGAR/crates/ogar-ad" }
+ogar-az = { path = "../OGAR/crates/ogar-az" }

@@ -68,6 +68,11 @@ impl UnavailableDirectory {
 pub enum Recipient {
     Account(Account),
     Group(Group),
+    /// A mailing list the directory expands itself: mail to `email` goes to
+    /// `members`, and no principal is created for it, so membership in it
+    /// confers neither its address nor any grant. Used by directories that
+    /// resolve list membership themselves (dir-sim).
+    List(List),
     Invalid,
 }
 
@@ -85,6 +90,15 @@ pub struct Group {
     pub email: String,
     pub email_aliases: Vec<String>,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct List {
+    pub email: String,
+    pub email_aliases: Vec<String>,
+    /// The addresses mail to the list is delivered to, already expanded
+    /// through nested lists.
+    pub members: Vec<String>,
 }
 
 #[derive(Clone, Debug)]

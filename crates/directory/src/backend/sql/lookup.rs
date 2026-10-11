@@ -146,6 +146,7 @@ impl SqlDirectory {
                 Ok(Recipient::Account(account))
             }
             Recipient::Group(group) => Ok(Recipient::Group(group)),
+            Recipient::List(list) => Ok(Recipient::List(list)),
             Recipient::Invalid => Ok(Recipient::Invalid),
         }
     }

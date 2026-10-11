@@ -100,8 +100,9 @@ jobs:
           a_disabled_shared_mailbox_gets_an_account
           a_mail_label_on_another_user_claims_nothing
           a_remote_mailbox_needs_its_cloud_mailbox
-          an_account_carries_its_groups
-          an_account_carries_its_nested_groups
+          a_distribution_list_confers_no_group
+          a_distribution_list_expands_to_its_members
+          a_group_address_is_a_list_not_an_account
           an_account_keeps_the_groups_its_sid_chain_reaches
           an_enabled_account_without_a_mailbox_gets_no_mailbox
           without_the_cloud_ad_alone_decides
