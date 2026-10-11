@@ -63,7 +63,9 @@ use std::collections::HashSet;
 
 use crate::{Account, Credentials, Group, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
-use lance_graph_dir_sim::{CloudMailboxes, GroupProperty, GroupWhere, VersionStore, View};
+use lance_graph_dir_sim::{
+    CloudMailboxes, GroupProperty, GroupWhere, VersionStore, View, receives_mail,
+};
 use ogar_dir_core::Guid128;
 use ogar_dir_sim::{Attribute, VersionId, Violation};
 
@@ -98,12 +100,10 @@ impl DirSimDirectory {
         self
     }
 
-    /// Whether mail to `node` is delivered to it in `view`.
+    /// Whether mail to `node` is delivered to it in `view`: dir-sim's one
+    /// delivery rule, with the cloud when it was observed.
     fn receives(&self, view: &View<'_>, node: &Guid128) -> bool {
-        match &self.cloud {
-            Some(cloud) => cloud.delivers_to(view, node),
-            None => view.is_mail_recipient(node),
-        }
+        receives_mail(view, self.cloud.as_ref(), node)
     }
 
     fn view(&self) -> trc::Result<View<'_>> {
