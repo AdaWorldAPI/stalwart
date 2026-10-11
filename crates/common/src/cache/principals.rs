@@ -713,24 +713,33 @@ impl Server {
         }
 
         // A group's addresses become the member's own, so the member can
-        // send as the group, only where the directory serving the group's
-        // domain grants that through membership. The membership itself
-        // (`id_member_of`, and the ACLs it carries) is kept either way.
-        for &group_id in &account.id_member_of {
-            if let Some(group) = self.try_account(group_id).await? {
-                for address in group.addresses.iter() {
-                    if let Some(domain) = self.domain_by_id(address.domain_id).await?
-                        && self
-                            .directory_for(&domain)
-                            .is_none_or(|directory| directory.members_send_as_group())
-                    {
-                        for name in domain.names.iter() {
-                            let mut addr =
-                                String::with_capacity(name.len() + address.local_part.len() + 1);
-                            addr.push_str(address.local_part.as_ref());
-                            addr.push('@');
-                            addr.push_str(name.as_ref());
-                            addresses.push(addr);
+        // send as the group, only where membership grants that. The account's
+        // own directory decides: it is the one that supplied the membership,
+        // whichever directory serves the group's address. The membership
+        // itself (`id_member_of`, and the ACLs it carries) is kept either way.
+        let members_send_as_group = match account.addresses.first() {
+            Some(primary) => match self.domain_by_id(primary.domain_id).await? {
+                Some(domain) => self
+                    .directory_for(&domain)
+                    .is_none_or(|directory| directory.members_send_as_group()),
+                None => true,
+            },
+            None => true,
+        };
+        if members_send_as_group {
+            for &group_id in &account.id_member_of {
+                if let Some(group) = self.try_account(group_id).await? {
+                    for address in group.addresses.iter() {
+                        if let Some(domain) = self.domain_by_id(address.domain_id).await? {
+                            for name in domain.names.iter() {
+                                let mut addr = String::with_capacity(
+                                    name.len() + address.local_part.len() + 1,
+                                );
+                                addr.push_str(address.local_part.as_ref());
+                                addr.push('@');
+                                addr.push_str(name.as_ref());
+                                addresses.push(addr);
+                            }
                         }
                     }
                 }
