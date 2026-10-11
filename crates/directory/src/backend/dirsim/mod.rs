@@ -379,6 +379,26 @@ mod tests {
         assert_eq!(acct.groups, Some(vec!["finance@example.org".to_string()]));
     }
 
+    // A mail-enabled security group carries its members' ACL grants, so
+    // the member keeps it among its groups. Being a member does not let
+    // it send as the group: in Exchange that takes an explicit SendAs
+    // grant on the group, which membership is not.
+    #[tokio::test]
+    async fn membership_in_a_security_group_is_not_send_as() {
+        let dir = directory_with(
+            vec![
+                (g(0xA1), user_a()),
+                (g(0x62), security_group(Some("finance@example.org"))),
+            ],
+            vec![(g(0xA1), g(0x62))],
+        );
+        let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
+            panic!("expected an account");
+        };
+        assert_eq!(acct.groups, Some(vec!["finance@example.org".to_string()]));
+        assert!(!crate::Directory::DirSim(dir).members_send_as_group());
+    }
+
     // A group's address names a list to expand, never an account and never
     // a Stalwart group account: no mailbox, no credentials, and nothing a
     // member could send as.

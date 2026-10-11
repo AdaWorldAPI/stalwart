@@ -33,6 +33,24 @@ impl Directory {
         .caused_by(trc::location!())
     }
 
+    /// Whether a member of a group this directory serves may use the
+    /// group's addresses as its own, i.e. send as the group by being a
+    /// member of it. Stalwart's own groups work that way, and so do the
+    /// LDAP and SQL directories it reads them from.
+    ///
+    /// A simulated Active Directory does not: membership in a security
+    /// group carries its ACL grants, and sending as the group needs an
+    /// explicit SendAs grant that membership is not (OGAR
+    /// `DIRECTORY-SIMULATION-POC.md`, X13). The member keeps the group for
+    /// its ACLs either way.
+    pub fn members_send_as_group(&self) -> bool {
+        match &self {
+            #[cfg(feature = "dir-sim")]
+            Directory::DirSim(_) => false,
+            _ => true,
+        }
+    }
+
     pub fn has_bearer_token_support(&self) -> bool {
         match &self {
             Directory::OpenId(_) => true,
