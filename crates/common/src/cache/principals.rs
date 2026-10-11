@@ -23,6 +23,7 @@ use crate::{
         encryption::{EncryptionMethod, parse_public_key},
     },
 };
+use directory::Directory;
 use registry::{
     schema::{
         enums::{DkimRotationStage, Locale, StorageQuota, TenantStorageQuota},
@@ -711,10 +712,18 @@ impl Server {
             }
         }
 
+        // A group's addresses become the member's own, so the member can
+        // send as the group, only where the directory serving the group's
+        // domain grants that through membership. The membership itself
+        // (`id_member_of`, and the ACLs it carries) is kept either way.
         for &group_id in &account.id_member_of {
             if let Some(group) = self.try_account(group_id).await? {
                 for address in group.addresses.iter() {
-                    if let Some(domain) = self.domain_by_id(address.domain_id).await? {
+                    if let Some(domain) = self.domain_by_id(address.domain_id).await?
+                        && self
+                            .directory_for(&domain)
+                            .is_none_or(|directory| directory.members_send_as_group())
+                    {
                         for name in domain.names.iter() {
                             let mut addr =
                                 String::with_capacity(name.len() + address.local_part.len() + 1);
@@ -733,6 +742,25 @@ impl Server {
             account,
             addresses,
         })
+    }
+
+    /// The directory that answers for `domain`: the rule
+    /// `get_directory_for_domain` applies to a domain name.
+    fn directory_for(&self, domain: &DomainCache) -> Option<&Arc<Directory>> {
+        // SPDX-SnippetBegin
+        // SPDX-FileCopyrightText: 2020 Stalwart Labs LLC <hello@stalw.art>
+        // SPDX-License-Identifier: LicenseRef-SEL
+        #[cfg(feature = "enterprise")]
+        if self.core.is_enterprise_edition() {
+            return domain
+                .id_directory
+                .and_then(|id_directory| self.core.storage.directories.get(&id_directory))
+                .or_else(|| self.get_default_directory());
+        }
+        // SPDX-SnippetEnd
+
+        let _ = domain;
+        self.get_default_directory()
     }
 
     pub async fn role(&self, id: u32) -> trc::Result<Arc<RoleCache>> {
