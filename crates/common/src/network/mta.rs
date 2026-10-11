@@ -138,6 +138,11 @@ impl Server {
                         RcptResolution::Accept
                     });
                 }
+                Recipient::List(list) => {
+                    return Ok(RcptResolution::Expand(
+                        list.members.into_iter().map(Box::from).collect(),
+                    ));
+                }
                 Recipient::Invalid => {}
             }
         }

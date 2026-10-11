@@ -49,19 +49,22 @@
 //!
 //! The directory also answers what the owner *is*:
 //!
-//! - a group's address is a [`Recipient::Group`], never an account: a group
-//!   has no mailbox and no credentials of its own;
-//! - an account carries its groups ([`Account::groups`]) as their primary
-//!   SMTP addresses, the same shape the LDAP backend produces. Stalwart
-//!   synchronises them into the account's group membership, which is where
-//!   its roles and permissions attach. The list is the directory's whole
-//!   answer (`Some`, possibly empty), so a membership the directory dropped
-//!   is dropped from the account as well. A group without a primary SMTP
-//!   address cannot be named in Stalwart and is left out.
+//! - a group's address is a [`Recipient::List`]: Stalwart delivers to its
+//!   members, expanded here through nested lists, and creates no principal
+//!   for it. A group has no mailbox and no credentials of its own, and
+//!   being on a list gives a member neither the list's address to send as
+//!   nor any grant (OGAR `DIRECTORY-SIMULATION-POC.md`, X13);
+//! - an account carries its security groups ([`Account::groups`]) as their
+//!   primary SMTP addresses, the same shape the LDAP backend produces.
+//!   Stalwart synchronises them into the account's group membership, which
+//!   is where its roles and permissions attach. They are the groups whose
+//!   SID the account holds, through nested security groups. The list is
+//!   the directory's whole answer (`Some`, possibly empty), so a membership
+//!   the directory dropped is dropped from the account as well. A group
+//!   without a primary SMTP address cannot be named in Stalwart and is left
+//!   out.
 
-use std::collections::HashSet;
-
-use crate::{Account, Credentials, Group, Recipient};
+use crate::{Account, Credentials, List, Recipient};
 use lance_graph_dir_sim::validate::address_owner;
 use lance_graph_dir_sim::{
     CloudMailboxes, GroupProperty, GroupWhere, VersionStore, View, receives_mail,
@@ -163,10 +166,10 @@ impl DirSimDirectory {
             .into_iter()
             .collect();
         if view.group_ordinal(&owner).is_some() {
-            return Ok(Recipient::Group(Group {
+            return Ok(Recipient::List(List {
                 email,
                 email_aliases,
-                description: None,
+                members: self.list_members(view, &owner),
             }));
         }
         Ok(Recipient::Account(Account {
@@ -177,36 +180,38 @@ impl DirSimDirectory {
         }))
     }
 
-    /// The primary SMTP addresses of the groups `user` is a member of, as
-    /// Stalwart means it: a group's addresses become the account's, and a
-    /// group's ACL grants become the account's. So the list is two chains,
-    /// in group order:
-    ///
-    /// * the mail chain: a list reaches `user` directly or through nested
-    ///   lists, each by its own address, so a group without an address ends
-    ///   it;
-    /// * the SID chain: a security group passes its permissions down through
-    ///   nested security groups, with or without an address; a group without
-    ///   a SID ends it.
-    ///
-    /// Stalwart names a group by its address, so only addressed groups are
-    /// listed. A group reached only through a group without an address and
-    /// without a SID is not.
-    fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
-        let mail =
-            view.groups_transitive_through(user, &GroupWhere::Is(GroupProperty::MailEnabled));
-        let sid = view.security_identifiers(user);
-        let mut seen = HashSet::new();
-        mail.into_iter()
-            .chain(sid)
-            .filter(|group| seen.insert(*group))
-            .filter(|group| view.exists(group))
-            .filter_map(|group| {
-                view.attr(&group, Attribute::PrimarySmtp)
-                    .and_then(|value| self.store.value(value))
-                    .and_then(utils::sanitize_email)
-            })
+    /// Who mail to `group` is delivered to: the members the mail chain
+    /// reaches (directly, or through nested lists by their own addresses),
+    /// each that receives mail, by its primary SMTP address. Mail is chained
+    /// addressing, never membership, so this is the whole of what a list
+    /// does: its members get its mail, not its address or its grants.
+    fn list_members(&self, view: &View<'_>, group: &Guid128) -> Vec<String> {
+        view.members_transitive_through(group, &GroupWhere::Is(GroupProperty::MailEnabled))
+            .into_iter()
+            .filter(|member| self.receives(view, member))
+            .filter_map(|member| self.primary_smtp(view, &member))
             .collect()
+    }
+
+    /// The groups whose ACL grants `user` holds in Stalwart: the security
+    /// groups whose SID it holds, directly or through nested security
+    /// groups, by their primary SMTP address (Stalwart names a group by its
+    /// address, so a security group without one is not listed). A
+    /// distribution list is mail, not membership, and is never listed: it
+    /// would give the user its address to send as, and grants it does not
+    /// carry.
+    fn groups_of(&self, view: &View<'_>, user: &Guid128) -> Vec<String> {
+        view.security_identifiers(user)
+            .into_iter()
+            .filter(|group| view.exists(group))
+            .filter_map(|group| self.primary_smtp(view, &group))
+            .collect()
+    }
+
+    fn primary_smtp(&self, view: &View<'_>, node: &Guid128) -> Option<String> {
+        view.attr(node, Attribute::PrimarySmtp)
+            .and_then(|value| self.store.value(value))
+            .and_then(utils::sanitize_email)
     }
 }
 
@@ -283,55 +288,67 @@ mod tests {
         g
     }
 
-    // The account carries the groups the directory says it is in, by their
-    // primary SMTP address; a non-member group and an address-less group are
-    // not listed.
+    // A distribution list is mail, not membership (X13): being in one gives
+    // the account neither the list's address nor its ACL grants, so it is
+    // not among the account's groups. A security group is, by its address.
     #[tokio::test]
-    async fn an_account_carries_its_groups() {
+    async fn a_distribution_list_confers_no_group() {
         let dir = directory_with(
             vec![
                 (g(0xA1), user_a()),
                 (g(0x61), group(Some("sales@example.org"))),
-                (g(0x62), group(Some("legal@example.org"))),
+                (g(0x62), security_group(Some("finance@example.org"))),
                 (g(0x63), group(None)),
             ],
-            vec![(g(0xA1), g(0x61)), (g(0xA1), g(0x63))],
+            vec![(g(0xA1), g(0x61)), (g(0xA1), g(0x62)), (g(0xA1), g(0x63))],
         );
         let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
             panic!("expected an account");
         };
-        assert_eq!(acct.groups, Some(vec!["sales@example.org".to_string()]));
+        assert_eq!(acct.groups, Some(vec!["finance@example.org".to_string()]));
     }
 
-    // Mail is chained addressing: A is in team, which is in legal, so A
-    // carries both. A is also in an address-less group nested in board; that
-    // group cannot be addressed, so the chain to board ends there.
+    // Mail to a list reaches its members, through nested lists by their own
+    // addresses: legal contains team, which contains A and B. A list nested
+    // through an address-less group is not reached (C), and a member that
+    // does not receive mail (D, no mailbox) is not delivered to.
     #[tokio::test]
-    async fn an_account_carries_its_nested_groups() {
+    async fn a_distribution_list_expands_to_its_members() {
+        let mut d = ObservedNode::user("d.upn@example.org", "d@example.org");
+        d.active = Some(true);
+        d.recipient = Some(ObservedRecipient::default());
         let dir = directory_with(
             vec![
                 (g(0xA1), user_a()),
+                (
+                    g(0xB0),
+                    ObservedNode::user("b.upn@example.org", "b@example.org"),
+                ),
+                (
+                    g(0xC0),
+                    ObservedNode::user("c.upn@example.org", "c@example.org"),
+                ),
+                (g(0xDD), d),
                 (g(0x61), group(Some("team@example.org"))),
                 (g(0x62), group(Some("legal@example.org"))),
                 (g(0x63), group(None)),
-                (g(0x64), group(Some("board@example.org"))),
             ],
             vec![
                 (g(0xA1), g(0x61)),
+                (g(0xB0), g(0x61)),
+                (g(0xDD), g(0x61)),
                 (g(0x61), g(0x62)),
-                (g(0xA1), g(0x63)),
-                (g(0x63), g(0x64)),
+                (g(0xC0), g(0x63)),
+                (g(0x63), g(0x62)),
             ],
         );
-        let Recipient::Account(acct) = dir.recipient("a@example.org").await.unwrap() else {
-            panic!("expected an account");
-        };
         assert_eq!(
-            acct.groups,
-            Some(vec![
-                "team@example.org".to_string(),
-                "legal@example.org".to_string()
-            ])
+            dir.recipient("legal@example.org").await.unwrap(),
+            Recipient::List(List {
+                email: "legal@example.org".into(),
+                email_aliases: vec![],
+                members: vec!["a@example.org".into(), "b@example.org".into()],
+            })
         );
     }
 
@@ -362,14 +379,15 @@ mod tests {
         assert_eq!(acct.groups, Some(vec!["finance@example.org".to_string()]));
     }
 
-    // A group's address names a group, not an account: no mailbox, no
-    // credentials.
+    // A group's address names a list to expand, never an account and never
+    // a Stalwart group account: no mailbox, no credentials, and nothing a
+    // member could send as.
     #[tokio::test]
-    async fn a_group_address_is_a_group_not_an_account() {
+    async fn a_group_address_is_a_list_not_an_account() {
         let dir = directory(vec![(g(0x61), group(Some("sales@example.org")))]);
         assert_eq!(
             dir.recipient("sales@example.org").await.unwrap(),
-            Recipient::Group(Group {
+            Recipient::List(List {
                 email: "sales@example.org".into(),
                 ..Default::default()
             })
