@@ -138,10 +138,23 @@ impl Server {
                         RcptResolution::Accept
                     });
                 }
+                // A list expands to the members the directory resolves to an
+                // account. Each is provisioned here, because a queued
+                // expansion adds the addresses straight to the spool and local
+                // delivery only consults the registry. An empty list falls
+                // through like an unknown address: an empty expansion would
+                // leave an EXPN client without a reply.
                 Recipient::List(list) => {
-                    return Ok(RcptResolution::Expand(
-                        list.members.into_iter().map(Box::from).collect(),
-                    ));
+                    let mut members = Vec::with_capacity(list.members.len());
+                    for member in list.members {
+                        if let Recipient::Account(account) = directory.recipient(&member).await? {
+                            Box::pin(self.synchronize_account(account)).await?;
+                            members.push(member.into_boxed_str());
+                        }
+                    }
+                    if !members.is_empty() {
+                        return Ok(RcptResolution::Expand(members.into()));
+                    }
                 }
                 Recipient::Invalid => {}
             }
